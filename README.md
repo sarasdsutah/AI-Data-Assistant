@@ -52,6 +52,12 @@ PYTHONPATH=src python -m product_insights_assistant.webapp
 
 Then open [http://127.0.0.1:8000](http://127.0.0.1:8000), upload a CSV, describe the dataset or business context, and submit a question.
 
+To use OpenAI from the app, put your key in [`/.env`](/Users/sarasong/Documents/AI-Data-Assistant/.env):
+
+```bash
+OPENAI_API_KEY=your_openai_api_key
+```
+
 Use an OpenAI model:
 
 ```bash
