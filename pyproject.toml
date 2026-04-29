@@ -1,23 +1,14 @@
 [project]
-name = "ai-product-insights-assistant"
+name = "ai-data-assistant"
 version = "0.1.0"
-description = "A starter AI Product Insights Assistant with retrieval, analysis, and evaluation."
+description = "A local Streamlit app for credit card spending analysis."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "altair>=6.0.0",
-  "pandas>=3.0.0",
+  "pandas>=2.2.0,<3.0.0",
   "streamlit>=1.57.0",
 ]
-
-[project.optional-dependencies]
-llm = [
-  "openai>=1.30.0",
-]
-
-[project.scripts]
-product-insights = "product_insights_assistant.cli:main"
-product-insights-ui = "product_insights_assistant.webapp:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]
