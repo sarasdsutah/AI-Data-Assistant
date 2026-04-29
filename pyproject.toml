@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "A starter AI Product Insights Assistant with retrieval, analysis, and evaluation."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+  "altair>=6.0.0",
+  "pandas>=3.0.0",
+  "streamlit>=1.57.0",
+]
 
 [project.optional-dependencies]
 llm = [

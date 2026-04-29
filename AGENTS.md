@@ -1,5 +1,5 @@
 - Store schemas and related materials in `knowledge/`.
 - The goal of this project is to build an AI agent for credit card usage analysis.
-- The dataset in the `data/` folder comes from Empower transaction data. For now, I am focusing only on Costco credit card transactions issued by Citi.
+- The dataset in the `data/` folder is a sample dataset from Empower transaction data. For now, I am focusing only on Costco credit card transactions issued by Citi.
 - The target users are individuals who want insights into their personal spending.
 - In the future, I may build a Streamlit-powered website for users.
