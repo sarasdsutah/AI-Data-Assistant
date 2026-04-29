@@ -1,145 +1,95 @@
-# AI Product Insights Assistant
+# AI Data Assistant
 
-This repo now contains a starter assistant for product analytics workflows:
+A local Streamlit app for exploring personal credit card spending from transaction CSV data.
 
-- ingest a user-behavior dataset
-- retrieve relevant context from product and experiment docs
-- generate churn and retention insights
-- run a small evaluation harness
-- analyze uploaded datasets through a local web UI
+The current project focuses on Costco Anywhere Visa Card by Citi transactions exported from Empower. The dataset in `data/` is treated as a local sample dataset and is not committed to the repository.
 
-## What It Includes
+## What It Does
 
-- `data/users.csv`: sample SaaS usage and churn data
-- `knowledge/*.md`: internal docs used as retrieval context
-- `src/product_insights_assistant/`: retrieval, analysis, evaluation, and CLI code
-- `src/product_insights_assistant/webapp.py`: browser-based UI for uploads and analysis
+- Loads a transaction CSV from the local `data/` folder or from a user upload.
+- Applies user-approved category normalization rules from `knowledge/category_normalization_rules.md`.
+- Filters analysis to spending transactions only, excluding credit card payback/payment rows.
+- Shows a dashboard with date range, total spend, transaction count, and average transaction size.
+- Visualizes month-over-month spending by category.
+- Ranks spending categories from highest to lowest spend.
+- Lets users select a category to inspect detailed transactions for that category.
+- Provides a simple chat-style question area for spending summaries, category questions, monthly trends, and data quality checks.
 
-The assistant works in two modes:
+## Project Structure
 
-1. Fallback mode: deterministic, offline, no external dependencies
-2. OpenAI mode: uses an LLM if you set `OPENAI_API_KEY` and pass `--model`
-
-## Quick Start
-
-Run a single analysis:
-
-```bash
-PYTHONPATH=src python -m product_insights_assistant.cli \
-  --question "Based on current behavior and prior experiments, what should we do next?"
+```text
+.
+├── AGENTS.md
+├── README.md
+├── knowledge/
+│   ├── category_normalization_rules.md
+│   ├── dataset_structure.md
+│   └── spending_analysis_rules.md
+├── pyproject.toml
+└── streamlit_app.py
 ```
 
-Run the lightweight evaluation suite:
+The local `data/` folder is expected during development, but transaction CSV files are ignored by git to avoid pushing personal spending data.
+
+## Expected Dataset
+
+The app expects a CSV with these columns:
+
+- `Date`
+- `Account`
+- `Description`
+- `Category`
+- `Tags`
+- `Amount`
+
+Current schema notes live in `knowledge/dataset_structure.md`.
+
+## Knowledge Files
+
+- `knowledge/dataset_structure.md`: documents the CSV structure only.
+- `knowledge/category_normalization_rules.md`: stores exact-match category cleanup rules.
+- `knowledge/spending_analysis_rules.md`: records analysis rules, including spending-only filtering.
+
+Knowledge files should avoid row-level personal spending details, account identifiers, transaction examples, and amount summaries unless explicitly needed and approved.
+
+## Local Setup
+
+Create and activate a virtual environment:
 
 ```bash
-PYTHONPATH=src python -m product_insights_assistant.cli --eval
+python3 -m venv .venv
+source .venv/bin/activate
 ```
 
-Pass business context through the CLI:
+Install dependencies:
 
 ```bash
-PYTHONPATH=src python -m product_insights_assistant.cli \
-  --data data/users.csv \
-  --business-context "This is a SaaS activation dataset. We care about first-30-day churn." \
-  --question "What patterns and experiments should the product team focus on?"
+pip install -e .
 ```
 
-Run the local web UI:
+Run the app:
 
 ```bash
-PYTHONPATH=src python -m product_insights_assistant.webapp
+streamlit run streamlit_app.py
 ```
 
-Then open [http://127.0.0.1:8000](http://127.0.0.1:8000), upload a CSV, describe the dataset or business context, and submit a question.
+Then open:
 
-To use OpenAI from the app, put your key in [`/.env`](/Users/sarasong/Documents/AI-Data-Assistant/.env):
-
-```bash
-OPENAI_API_KEY=your_openai_api_key
+```text
+http://localhost:8501
 ```
 
-Use an OpenAI model:
+## Development Notes
 
-```bash
-pip install -e ".[llm]"
-export OPENAI_API_KEY=your_key_here
-PYTHONPATH=src python -m product_insights_assistant.cli \
-  --model gpt-4.1 \
-  --question "Which users are most likely to churn and what experiment should we run?"
-```
+- The app currently runs locally and does not require an OpenAI API key.
+- The chat section is rule-based and uses the cleaned transaction dataframe.
+- The Streamlit app is the main entry point.
+- Keep private CSVs and `.env` files out of git.
 
-## How The Architecture Maps To Your Idea
+## Future Ideas
 
-### 1. Dataset
-
-The assistant reads a CSV with fields like:
-
-- `user_id`
-- `week1_usage`
-- `week2_usage`
-- `churned`
-
-You can replace `data/users.csv` with a Kaggle export or your own warehouse extract.
-The UI also accepts arbitrary CSVs and will fall back to a generic dataset summary when the schema is not churn-specific.
-
-### 2. LLM Reasoning
-
-`analysis.py` builds a prompt that combines:
-
-- a preview of the uploaded dataset
-- dataset-level summary statistics
-- churn metrics when the uploaded CSV matches the starter schema
-- retrieved product context
-- business-context text entered by the user
-- the user question
-
-### 3. RAG
-
-`rag.py` loads markdown docs and performs lightweight keyword retrieval.
-
-This is intentionally simple for a starter version. The next upgrade would be:
-
-- embeddings
-- vector storage
-- chunking
-- metadata filters by doc type or date
-
-### 4. Evaluation
-
-`evaluate.py` runs a few checks against expected substrings so you can catch obvious regressions.
-
-## Recommended Next Upgrade Paths
-
-### A. Natural Language to SQL
-
-Add:
-
-- a schema description
-- a query generation step
-- a SQL execution sandbox
-- result explanation
-
-### B. Churn Explainer
-
-Add:
-
-- model scores per user
-- per-user risk reasons
-- recommended intervention playbooks
-
-### C. Experiment Copilot
-
-Add:
-
-- experiment results ingestion
-- decision rubrics
-- ship / iterate / kill recommendations
-
-## Suggested Project Structure For V2
-
-If you keep building this out, the next step is usually:
-
-- replace CSV with warehouse queries
-- replace keyword retrieval with embeddings
-- add a web UI or notebook interface
-- add proper eval datasets and rubric scoring
+- Add richer natural-language analysis powered by an LLM.
+- Add persistent category rule editing from the UI.
+- Support multiple cards/accounts with account-level filters.
+- Add budget comparison and recurring-spend detection.
+- Add exportable spending summaries.
