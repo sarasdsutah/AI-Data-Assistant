@@ -10,9 +10,9 @@ account identifiers, or row-level spending details here.
 
 | Description | Normalized Category | Rationale |
 |---|---|---|
-| `Tiger Sugar` | `Milk Tea/Coffee` | Milk tea or coffee-style spending. |
-| `Tea Imports` | `Milk Tea/Coffee` | Tea or coffee-style spending. |
-| `State Liquor Store` | `Wine/Alcohol` | Wine or alcohol spending. |
+| `Tiger Sugar` | `Coffee & Drinks` | Coffee, tea, or drink spending. |
+| `Tea Imports` | `Coffee & Drinks` | Coffee, tea, or drink spending. |
+| `State Liquor Store` | `Coffee & Drinks` | Drink spending. |
 | `Interview Query Interviewquerca` | `Career Growth` | Career growth-related spending. |
 | `Airgarage` | `Parking` | Parking spending. |
 | `Ccri By Upma Salt Lake Citut` | `Parking` | Parking spending. |

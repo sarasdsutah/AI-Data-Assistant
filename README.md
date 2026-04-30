@@ -6,7 +6,8 @@ The current project focuses on Costco Anywhere Visa Card by Citi transactions ex
 
 ## What It Does
 
-- Loads a transaction CSV from the local `data/` folder or from a user upload.
+- Loads a transaction CSV from the local `data/` folder or one or more user-uploaded CSV files.
+- Cleans each uploaded CSV, assigns app-defined categories, adds its source file name, and combines the cleaned rows before analysis.
 - Applies user-approved category normalization rules from `knowledge/category_normalization_rules.md`.
 - Filters analysis to spending transactions only, excluding credit card payback/payment rows.
 - Shows a dashboard with date range, total spend, transaction count, and average transaction size.
@@ -23,6 +24,7 @@ The current project focuses on Costco Anywhere Visa Card by Citi transactions ex
 ├── README.md
 ├── knowledge/
 │   ├── category_normalization_rules.md
+│   ├── category_inference_rules.md
 │   ├── dataset_structure.md
 │   └── spending_analysis_rules.md
 ├── pyproject.toml
@@ -33,14 +35,28 @@ The local `data/` folder is expected during development, but transaction CSV fil
 
 ## Expected Dataset
 
-The app expects a CSV with these columns:
+The app requires a CSV with these columns:
 
 - `Date`
-- `Account`
 - `Description`
+
+For transaction value, provide either:
+
+- `Amount`, using signed values, or
+- `Debit` and `Credit`, where debit charges are converted to negative spending amounts and credit rows are converted to positive amounts.
+
+These columns are optional. If they are missing, the app creates blank defaults:
+
+- `Account`
 - `Category`
 - `Tags`
-- `Amount`
+
+If `Category` is present, the app keeps it as `Original Category` for audit but does not use it
+for analysis. The cleaned `Category` is assigned from exact knowledge rules first, then inferred
+from `Description`.
+
+The sidebar can load a local sample CSV from `data/` or accept one or more CSV uploads.
+When multiple CSVs are uploaded, the app combines the cleaned transactions and offers a cleaned combined CSV download.
 
 Current schema notes live in `knowledge/dataset_structure.md`.
 
@@ -48,6 +64,7 @@ Current schema notes live in `knowledge/dataset_structure.md`.
 
 - `knowledge/dataset_structure.md`: documents the CSV structure only.
 - `knowledge/category_normalization_rules.md`: stores exact-match category cleanup rules.
+- `knowledge/category_inference_rules.md`: documents how missing categories are inferred.
 - `knowledge/spending_analysis_rules.md`: records analysis rules, including spending-only filtering.
 
 Knowledge files should avoid row-level personal spending details, account identifiers, transaction examples, and amount summaries unless explicitly needed and approved.
@@ -90,6 +107,6 @@ http://localhost:8501
 
 - Add richer natural-language analysis powered by an LLM.
 - Add persistent category rule editing from the UI.
-- Support multiple cards/accounts with account-level filters.
+- Add account-level filters for multiple cards/accounts.
 - Add budget comparison and recurring-spend detection.
 - Add exportable spending summaries.

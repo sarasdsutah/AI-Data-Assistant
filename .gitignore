@@ -3,4 +3,5 @@
 .venv/
 __pycache__/
 *.pyc
-data/2026-01-26 thru 2026-03-31 transactions.csv
+data/*.csv
+data/*.CSV

@@ -14,7 +14,35 @@ DATA_DIR = BASE_DIR / "data"
 KNOWLEDGE_DIR = BASE_DIR / "knowledge"
 CATEGORY_RULES_PATH = KNOWLEDGE_DIR / "category_normalization_rules.md"
 EXCLUDED_SPENDING_CATEGORIES = {"Credit Card Payments"}
-REQUIRED_COLUMNS = ["Date", "Account", "Description", "Category", "Tags", "Amount"]
+REQUIRED_COLUMNS = ["Date", "Description"]
+OPTIONAL_TEXT_COLUMNS = ["Account", "Category", "Tags"]
+SOURCE_FILE_COLUMN = "Source File"
+DEFAULT_CATEGORY = "Other"
+INFERRED_CATEGORY_RULES = [
+    ("Credit Card Payments", ["autopay", "auto-pmt", "payment", "pmt"]),
+    ("Parking", ["parking", "garage", "ccri", "honk"]),
+    ("Gasoline/Fuel", ["gas", "fuel", "gasoline", "holiday", "pilot_"]),
+    ("Groceries", ["grocery", "groceries", "market", "supermarket", "costco", "walmart", "wal-mart", "target", "dollar tree", "trader joe", "smith", "ocean mart", "harmons"]),
+    ("Coffee & Drinks", ["coffee", "tea", "milk tea", "boba", "beans & brews", "tiger sugar", "starbucks", "liquor", "wine", "alcohol"]),
+    ("Subscriptions", ["apple.com/bill", "prime", "medium.com", "ring.com", "openai", "chatgpt", "disney plus", "disney+", "disneyplus", "youtube premium", "youtubepremium", "uber one", "dashpass", "door dash pass", "doordash pass", "grubhub+", "instacart+"]),
+    ("Food Delivery", ["uber eats", "ubereats", "doordash", "door dash", "grubhub", "postmates", "seamless", "delivery.com"]),
+    ("Restaurants", ["restaurant", "food", "cafe", "bistro", "sushi", "bbq", "taco", "kitchen", "bakery", "tapas", "greek", "familymart", "tst*", "spitz", "sawadee", "cheesecake", "wiseguys", "concessions", "chick-fil-a", "cluckers", "mcdonald", "indochine", "halalepenos", "grill bar", "ramen"]),
+    ("Online Services", ["online", "software", "cloud", "hosting", "domain", "sourcegraph", "namecheap", "patreon", "digitalocean"]),
+    ("Charitable Giving", ["charity", "charitable", "rescue committee"]),
+    ("Housing/Rent", ["rentapplication", "rent application"]),
+    ("Career Growth", ["interview", "career", "course", "computing"]),
+    ("Entertainment", ["video", "comedy", "theater", "movie", "youtube", "state parks", "national park", "disney"]),
+    ("Education", ["school", "tuition"]),
+    ("Insurance", ["insurance", "lemonade", "trawick"]),
+    ("Home Improvement", ["home depot", "heating", "air"]),
+    ("Personal Care", ["pharmacy", "spa", "personal care", "walgreens", "hammam", "camera shy"]),
+    ("Clothing/Shoes", ["clothing", "shoes", "nike", "j.crew", "j. crew", "gap", "carter", "outlet", "nordstrom", "marshalls"]),
+    ("Child/Dependent", ["child", "dependent", "kids", "care.com", "dancing", "thanksgiving point"]),
+    ("Travel", ["travel", "booking", "hotel", "airline", "rent-a-car"]),
+    ("Automotive", ["automotive", "toll", "udot", "tire", "fab freddy"]),
+    ("Amazon Shopping", ["amazon", "amzn"]),
+    ("Other General Merchandise", ["dollar"]),
+]
 
 
 st.set_page_config(
@@ -49,22 +77,86 @@ def read_csv_from_upload(uploaded_file) -> pd.DataFrame:
 
 
 def find_default_csv() -> Path | None:
-    csv_files = sorted(DATA_DIR.glob("*.csv"))
+    csv_files = find_csv_files()
     return csv_files[0] if csv_files else None
 
 
-def prepare_transactions(raw_df: pd.DataFrame, category_rules: dict[str, str]) -> tuple[pd.DataFrame, pd.DataFrame]:
-    missing_columns = [column for column in REQUIRED_COLUMNS if column not in raw_df.columns]
+def find_csv_files() -> list[Path]:
+    return sorted(path for path in DATA_DIR.glob("*") if path.is_file() and path.suffix.lower() == ".csv")
+
+
+def prepare_transaction_sources(
+    sources: list[tuple[str, pd.DataFrame]],
+    category_rules: dict[str, str],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    cleaned_frames: list[pd.DataFrame] = []
+    spending_frames: list[pd.DataFrame] = []
+    excluded_frames: list[pd.DataFrame] = []
+
+    for source_name, raw_source_df in sources:
+        source_df = raw_source_df.copy()
+        source_df[SOURCE_FILE_COLUMN] = source_name
+        try:
+            df, spending_df, excluded_df = prepare_transactions(source_df, category_rules)
+        except ValueError as exc:
+            raise ValueError(f"{source_name}: {exc}") from exc
+
+        cleaned_frames.append(df)
+        spending_frames.append(spending_df)
+        excluded_frames.append(excluded_df)
+
+    combined_df = concat_frames(cleaned_frames)
+    combined_spending_df = concat_frames(spending_frames)
+    combined_excluded_df = concat_frames(excluded_frames)
+    for frame in [combined_df, combined_spending_df, combined_excluded_df]:
+        frame.attrs["source_count"] = len(sources)
+
+    return combined_df, combined_spending_df, combined_excluded_df
+
+
+def concat_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True, sort=False)
+
+
+def count_source_files(df: pd.DataFrame) -> int:
+    if "source_count" in df.attrs:
+        return int(df.attrs["source_count"])
+    if SOURCE_FILE_COLUMN in df.columns:
+        return int(df[SOURCE_FILE_COLUMN].nunique())
+    return 1
+
+
+def prepare_transactions(raw_df: pd.DataFrame, category_rules: dict[str, str]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    df = normalize_transaction_schema(raw_df)
+    missing_columns = [column for column in REQUIRED_COLUMNS if column not in df.columns]
+    if "Amount" not in df.columns:
+        missing_columns.append("Amount or Debit/Credit")
     if missing_columns:
         missing = ", ".join(missing_columns)
         raise ValueError(f"Missing required column(s): {missing}")
 
-    df = raw_df.copy()
+    for column in OPTIONAL_TEXT_COLUMNS:
+        if column not in df.columns:
+            df[column] = ""
+
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce")
-    df["Original Category"] = df["Category"].astype(str)
-    df["Category"] = df["Description"].map(category_rules).fillna(df["Original Category"])
-    df["Category Normalized"] = df["Category"] != df["Original Category"]
+    df["Description"] = df["Description"].fillna("").astype(str)
+    df["Original Category"] = df["Category"].fillna("").astype(str).str.strip()
+
+    inferred_categories = df["Description"].apply(infer_category)
+    exact_rule_categories = df["Description"].map(category_rules)
+    df["Category"] = exact_rule_categories.fillna(inferred_categories)
+    df["Category"] = df["Category"].fillna(DEFAULT_CATEGORY).replace("", DEFAULT_CATEGORY)
+    df["Category Normalized"] = (
+        (df["Original Category"] != "")
+        & (df["Category"] != df["Original Category"])
+    )
+    df["Category Inferred"] = exact_rule_categories.isna()
+    df["Category Source"] = "inferred"
+    df.loc[exact_rule_categories.notna(), "Category Source"] = "knowledge rule"
 
     valid_amount = df["Amount"].notna()
     spending_mask = (
@@ -76,6 +168,52 @@ def prepare_transactions(raw_df: pd.DataFrame, category_rules: dict[str, str]) -
     spending_df["Spend"] = spending_df["Amount"].abs()
     excluded_df = df.loc[~spending_mask].copy()
     return df, spending_df, excluded_df
+
+
+def normalize_transaction_schema(raw_df: pd.DataFrame) -> pd.DataFrame:
+    df = raw_df.copy()
+    df.columns = [str(column).strip() for column in df.columns]
+
+    if "Date" not in df.columns and "Posted Date" in df.columns:
+        df["Date"] = df["Posted Date"]
+
+    if "Description" not in df.columns and "Payee" in df.columns:
+        df["Description"] = df["Payee"]
+
+    if "Amount" not in df.columns and {"Debit", "Credit"}.issubset(df.columns):
+        debit = parse_money_series(df["Debit"]).fillna(0)
+        credit = parse_money_series(df["Credit"]).fillna(0)
+        df["Amount"] = credit - debit
+    elif "Amount" in df.columns:
+        df["Amount"] = parse_money_series(df["Amount"])
+
+    if "Account" not in df.columns and "Member Name" in df.columns:
+        df["Account"] = df["Member Name"]
+
+    return df
+
+
+def parse_money_series(series: pd.Series) -> pd.Series:
+    cleaned = (
+        series.fillna("")
+        .astype(str)
+        .str.strip()
+        .str.replace("$", "", regex=False)
+        .str.replace(",", "", regex=False)
+        .str.replace(r"^\((.*)\)$", r"-\1", regex=True)
+    )
+    return pd.to_numeric(cleaned.replace("", pd.NA), errors="coerce")
+
+
+def infer_category(description: object) -> str:
+    text = str(description).strip().lower()
+    if not text:
+        return DEFAULT_CATEGORY
+
+    for category, keywords in INFERRED_CATEGORY_RULES:
+        if any(keyword in text for keyword in keywords):
+            return category
+    return DEFAULT_CATEGORY
 
 
 def filter_spending_by_date(spending_df: pd.DataFrame, start_date: date | None, end_date: date | None) -> pd.DataFrame:
@@ -204,20 +342,28 @@ def build_specific_category_answer(spending_df: pd.DataFrame, category: str) -> 
 
 
 def build_data_quality_answer(df: pd.DataFrame, spending_df: pd.DataFrame) -> tuple[str, pd.DataFrame]:
-    normalized = int(df["Category Normalized"].sum())
+    exact_rules = int((df["Category Source"] == "knowledge rule").sum())
+    inferred = int(df["Category Inferred"].sum())
+    recategorized = int(df["Category Normalized"].sum())
     invalid_dates = int(df["Date"].isna().sum())
     invalid_amounts = int(df["Amount"].isna().sum())
+    source_count = count_source_files(df)
     answer = (
-        f"The loaded file has {len(df):,} total rows. "
+        f"The loaded dataset has {len(df):,} total rows across {source_count:,} source file(s). "
         f"{len(spending_df):,} rows are available for spending analysis. "
-        f"{normalized:,} rows had categories normalized by the knowledge rules. "
+        f"{exact_rules:,} rows used exact knowledge rules. "
+        f"{inferred:,} rows used inferred categories. "
+        f"{recategorized:,} provider categories were replaced by app categories. "
         f"Invalid dates: {invalid_dates:,}. Invalid amounts: {invalid_amounts:,}."
     )
     checks = pd.DataFrame(
         [
+            {"Check": "Source files", "Count": source_count},
             {"Check": "Rows loaded", "Count": len(df)},
             {"Check": "Rows used for spending analysis", "Count": len(spending_df)},
-            {"Check": "Rows with normalized categories", "Count": normalized},
+            {"Check": "Rows using exact knowledge rules", "Count": exact_rules},
+            {"Check": "Rows using inferred categories", "Count": inferred},
+            {"Check": "Provider categories replaced", "Count": recategorized},
             {"Check": "Rows with invalid dates", "Count": invalid_dates},
             {"Check": "Rows with invalid amounts", "Count": invalid_amounts},
         ]
@@ -234,13 +380,17 @@ def answer_question(question: str, df: pd.DataFrame, spending_df: pd.DataFrame) 
         answer, table = build_data_quality_answer(df, spending_df)
         return answer, table, "Data Checks"
 
+    if any(term in normalized_question for term in ["subscription", "subscriptions", "apple.com/bill", "prime", "medium", "ring", "openai", "chatgpt", "disney plus", "disney+", "youtube premium"]):
+        answer, table = build_specific_category_answer(spending_df, "Subscriptions")
+        return answer, table, "Subscriptions"
+
     if any(term in normalized_question for term in ["month", "monthly", "date", "trend", "time"]):
         answer, table = build_time_answer(spending_df)
         return answer, table, "Monthly Spend"
 
     category_terms = {
-        "Milk Tea/Coffee": ["tea", "coffee", "milk tea", "tiger sugar"],
-        "Wine/Alcohol": ["wine", "alcohol", "liquor"],
+        "Coffee & Drinks": ["tea", "coffee", "milk tea", "tiger sugar", "wine", "alcohol", "liquor"],
+        "Food Delivery": ["delivery", "food delivery", "uber eats", "ubereats", "doordash", "door dash", "grubhub", "postmates", "seamless"],
         "Parking": ["parking", "airgarage", "ccri"],
         "Career Growth": ["career", "interview", "growth"],
     }
@@ -340,6 +490,75 @@ def render_table(table: pd.DataFrame | None) -> None:
     st.dataframe(display, hide_index=True, use_container_width=True)
 
 
+def transaction_detail_display(details: pd.DataFrame) -> pd.DataFrame:
+    detail_columns = ["Date", SOURCE_FILE_COLUMN, "Description", "Category", "Spend"]
+    detail_columns = [column for column in detail_columns if column in details.columns]
+    display = details[detail_columns].copy()
+    if "Date" in display.columns:
+        display["Date"] = display["Date"].dt.date
+    return display
+
+
+def render_transaction_detail_table(details: pd.DataFrame) -> None:
+    st.dataframe(
+        transaction_detail_display(details),
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Spend": st.column_config.NumberColumn("Spend", format="$%.2f"),
+        },
+    )
+
+
+def latest_month_tabs(details: pd.DataFrame, count: int = 3) -> list[tuple[str, pd.DataFrame]]:
+    dated = details.dropna(subset=["Date"]).copy()
+    if dated.empty:
+        return []
+
+    dated["Transaction Month"] = dated["Date"].dt.to_period("M")
+    latest_months = sorted(dated["Transaction Month"].unique(), reverse=True)[:count]
+    tabs: list[tuple[str, pd.DataFrame]] = []
+    for month in latest_months:
+        month_details = dated[dated["Transaction Month"] == month].drop(columns=["Transaction Month"])
+        label = month.to_timestamp().strftime("%B %Y")
+        tabs.append((label, month_details))
+    return tabs
+
+
+def latest_month_spending_tabs(spending_df: pd.DataFrame, count: int = 3) -> list[tuple[str, pd.DataFrame]]:
+    dated = spending_df.dropna(subset=["Date"]).copy()
+    if dated.empty:
+        return []
+
+    dated["Transaction Month"] = dated["Date"].dt.to_period("M")
+    latest_months = sorted(dated["Transaction Month"].unique(), reverse=True)[:count]
+    tabs: list[tuple[str, pd.DataFrame]] = []
+    for month in latest_months:
+        month_spending = dated[dated["Transaction Month"] == month].drop(columns=["Transaction Month"])
+        label = month.to_timestamp().strftime("%B %Y")
+        tabs.append((label, month_spending))
+    return tabs
+
+
+def render_category_summary_selection(display: pd.DataFrame, key: str) -> str | None:
+    selection = st.dataframe(
+        display,
+        hide_index=True,
+        use_container_width=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key=key,
+        column_config={
+            "Spend": st.column_config.NumberColumn("Spend", format="$%.2f"),
+        },
+    )
+
+    selected_rows = selection.selection.rows if selection.selection else []
+    if not selected_rows:
+        return None
+    return str(display.iloc[selected_rows[0]]["Category"])
+
+
 def render_summary_table(table: pd.DataFrame | None, spending_df: pd.DataFrame) -> None:
     if table is None or table.empty:
         return
@@ -349,40 +568,45 @@ def render_summary_table(table: pd.DataFrame | None, spending_df: pd.DataFrame) 
 
     display = table.sort_values("Spend", ascending=False).reset_index(drop=True)
     st.caption("Select a category row to view its transactions.")
-    selection = st.dataframe(
-        display,
-        hide_index=True,
-        use_container_width=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        key="category_summary_table",
-        column_config={
-            "Spend": st.column_config.NumberColumn("Spend", format="$%.2f"),
-        },
-    )
+    monthly_summary_tabs = latest_month_spending_tabs(spending_df)
+    tab_specs = [("All", display)] + [
+        (label, category_summary(month_spending))
+        for label, month_spending in monthly_summary_tabs
+    ]
+    tabs = st.tabs([label for label, _ in tab_specs])
 
-    selected_rows = selection.selection.rows if selection.selection else []
-    if not selected_rows:
+    selected_category = None
+    for index, (tab, (label, summary)) in enumerate(zip(tabs, tab_specs)):
+        with tab:
+            if summary.empty:
+                st.caption("No spending rows are available for this period.")
+                continue
+            selected = render_category_summary_selection(
+                summary.sort_values("Spend", ascending=False).reset_index(drop=True),
+                f"category_summary_table_{index}",
+            )
+            if selected is not None:
+                selected_category = selected
+
+    if selected_category is None:
         return
 
-    selected_category = str(display.iloc[selected_rows[0]]["Category"])
     details = spending_df[spending_df["Category"] == selected_category].copy()
     if details.empty:
         return
 
     details = details.sort_values(["Date", "Spend"], ascending=[False, False])
-    details_display = details[["Date", "Description", "Category", "Spend"]].copy()
-    details_display["Date"] = details_display["Date"].dt.date
-
     st.markdown(f"**Transactions: {selected_category}**")
-    st.dataframe(
-        details_display,
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            "Spend": st.column_config.NumberColumn("Spend", format="$%.2f"),
-        },
-    )
+    monthly_tabs = latest_month_tabs(details)
+    tab_labels = ["All"] + [label for label, _ in monthly_tabs]
+    tabs = st.tabs(tab_labels)
+    with tabs[0]:
+        render_transaction_detail_table(details)
+
+    for tab, (label, month_details) in zip(tabs[1:], monthly_tabs):
+        with tab:
+            st.markdown(f"**{label}**")
+            render_transaction_detail_table(month_details)
 
 
 def render_chart(table: pd.DataFrame | None, title: str) -> None:
@@ -494,44 +718,90 @@ def render_monthly_category_comparison_chart(spending_df: pd.DataFrame) -> None:
     st.altair_chart(chart, use_container_width=True)
 
 
+def format_source_names(source_names: list[str]) -> str:
+    if not source_names:
+        return "No dataset"
+    if len(source_names) == 1:
+        return source_names[0]
+
+    preview = ", ".join(source_names[:3])
+    if len(source_names) > 3:
+        preview = f"{preview}, +{len(source_names) - 3} more"
+    return f"{len(source_names)} files: {preview}"
+
+
+def make_unique_source_names(source_names: list[str]) -> list[str]:
+    totals: dict[str, int] = {}
+    for source_name in source_names:
+        totals[source_name] = totals.get(source_name, 0) + 1
+
+    seen: dict[str, int] = {}
+    unique_names: list[str] = []
+    for source_name in source_names:
+        seen[source_name] = seen.get(source_name, 0) + 1
+        if totals[source_name] == 1:
+            unique_names.append(source_name)
+        else:
+            unique_names.append(f"{source_name} ({seen[source_name]})")
+    return unique_names
+
+
 def main() -> None:
     render_global_styles()
     st.title("Credit Card Spending Assistant")
 
     category_rules = load_category_rules(str(CATEGORY_RULES_PATH))
-    default_csv = find_default_csv()
+    local_csv_files = find_csv_files()
 
     with st.sidebar:
         st.header("Data")
-        uploaded_file = st.file_uploader("CSV file", type=["csv"])
+        uploaded_files = st.file_uploader("CSV files", type=["csv"], accept_multiple_files=True)
+        if uploaded_files is None:
+            uploaded_files = []
+        has_uploaded_files = len(uploaded_files) > 0
+        selected_local_csv = None
+        if not has_uploaded_files and local_csv_files:
+            csv_names = [path.name for path in local_csv_files]
+            selected_name = st.selectbox("Sample CSV", csv_names)
+            selected_local_csv = local_csv_files[csv_names.index(selected_name)]
         show_rows = st.toggle("Show cleaned rows", value=False)
 
-        if uploaded_file is None and default_csv:
-            st.success(f"Loaded sample: {default_csv.name}")
-        elif uploaded_file is not None:
-            st.success(f"Loaded upload: {uploaded_file.name}")
+        if has_uploaded_files:
+            st.success(f"Loaded {len(uploaded_files)} upload(s).")
+        elif selected_local_csv:
+            st.success(f"Loaded sample: {selected_local_csv.name}")
         else:
             st.error("No CSV found in data/.")
 
-        st.divider()
-        st.header("Rules")
-        st.write(f"Category rules: {len(category_rules)}")
-        st.write("Analysis view: spending transactions only")
-
-    if uploaded_file is not None:
-        raw_df = read_csv_from_upload(uploaded_file)
-        data_name = uploaded_file.name
-    elif default_csv is not None:
-        raw_df = read_csv_from_path(str(default_csv))
-        data_name = default_csv.name
-    else:
-        st.stop()
-
     try:
-        df, spending_df, excluded_df = prepare_transactions(raw_df, category_rules)
-    except ValueError as exc:
+        if uploaded_files:
+            uploaded_source_names = make_unique_source_names(
+                [uploaded_file.name for uploaded_file in uploaded_files]
+            )
+            transaction_sources = [
+                (source_name, read_csv_from_upload(uploaded_file))
+                for source_name, uploaded_file in zip(uploaded_source_names, uploaded_files)
+            ]
+            data_name = format_source_names(uploaded_source_names)
+        elif selected_local_csv is not None:
+            transaction_sources = [(selected_local_csv.name, read_csv_from_path(str(selected_local_csv)))]
+            data_name = selected_local_csv.name
+        else:
+            st.stop()
+
+        df, spending_df, excluded_df = prepare_transaction_sources(transaction_sources, category_rules)
+    except (ValueError, pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
         st.error(str(exc))
         st.stop()
+
+    source_count = count_source_files(df)
+    with st.sidebar:
+        st.download_button(
+            "Download cleaned combined CSV" if source_count > 1 else "Download cleaned CSV",
+            data=df.to_csv(index=False).encode("utf-8"),
+            file_name="cleaned_combined_transactions.csv" if source_count > 1 else "cleaned_transactions.csv",
+            mime="text/csv",
+        )
 
     render_metric_row(spending_df)
     render_monthly_category_chart(spending_df)
@@ -549,7 +819,7 @@ def main() -> None:
         st.session_state.messages = [
             {
                 "role": "assistant",
-                "content": "Ask about spending categories, monthly trends, parking, milk tea/coffee, wine/alcohol, or data cleanup.",
+                "content": "Ask about spending categories, monthly trends, subscriptions, food delivery, parking, coffee/drinks, or data cleanup.",
             }
         ]
     if st.session_state.get("data_signature") != data_signature:
@@ -579,9 +849,18 @@ def main() -> None:
 
     if show_rows:
         st.subheader("Cleaned Spending Rows")
-        cleaned_display = filtered_spending_df[
-            ["Date", "Description", "Category", "Original Category", "Category Normalized", "Spend"]
-        ].copy()
+        cleaned_columns = [
+            "Date",
+            SOURCE_FILE_COLUMN,
+            "Description",
+            "Category",
+            "Category Source",
+            "Original Category",
+            "Category Normalized",
+            "Spend",
+        ]
+        cleaned_columns = [column for column in cleaned_columns if column in filtered_spending_df.columns]
+        cleaned_display = filtered_spending_df[cleaned_columns].copy()
         cleaned_display["Date"] = cleaned_display["Date"].dt.date
         cleaned_display["Spend"] = cleaned_display["Spend"].map(money)
         st.dataframe(cleaned_display, hide_index=True, use_container_width=True)
