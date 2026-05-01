@@ -14,6 +14,7 @@ import streamlit as st
 BASE_DIR = Path(__file__).parent
 KNOWLEDGE_DIR = BASE_DIR / "knowledge"
 CATEGORY_RULES_PATH = KNOWLEDGE_DIR / "category_normalization_rules.md"
+SPENDING_ANALYSIS_RULES_PATH = KNOWLEDGE_DIR / "spending_analysis_rules.md"
 EXCLUDED_SPENDING_CATEGORIES = {"Credit Card Payments"}
 REQUIRED_COLUMNS = ["Date", "Description"]
 OPTIONAL_TEXT_COLUMNS = ["Account", "Category", "Tags"]
@@ -110,6 +111,14 @@ def load_category_rules(path: str) -> dict[str, str]:
             description, category = match.groups()
             rules[description] = category
     return rules
+
+
+@st.cache_data
+def load_knowledge_text(path: str) -> str:
+    knowledge_path = Path(path)
+    if not knowledge_path.exists():
+        return ""
+    return knowledge_path.read_text(encoding="utf-8").strip()
 
 
 @st.cache_data
@@ -755,6 +764,7 @@ def dataframe_csv_text(df: pd.DataFrame, columns: list[str]) -> str:
 
 def build_chat_dataset_context(df: pd.DataFrame, spending_df: pd.DataFrame) -> str:
     quality_answer, quality_checks = build_data_quality_answer(df, spending_df)
+    spending_analysis_rules = load_knowledge_text(str(SPENDING_ANALYSIS_RULES_PATH))
     category_csv = category_summary(spending_df).to_csv(index=False)
     monthly_csv = monthly_summary(spending_df).to_csv(index=False)
     monthly_category_csv = monthly_category_summary(spending_df).to_csv(index=False)
@@ -786,6 +796,9 @@ Important analysis rules:
 - Credit card payment/payback rows have already been excluded from the spending CSV.
 - Use the CSV and summaries below as the source of truth. If the data does not support an answer, say so.
 - Do not invent merchants, categories, dates, or amounts.
+
+Knowledge analysis rules:
+{spending_analysis_rules or "No additional knowledge analysis rules loaded."}
 
 Overview:
 {build_overview(spending_df)}
@@ -1547,9 +1560,10 @@ def main() -> None:
 
     with right:
         st.subheader("Chat")
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.write(message["content"])
+        with st.container(height=420, border=True, autoscroll=True):
+            for message in st.session_state.messages:
+                with st.chat_message(message["role"]):
+                    st.write(message["content"])
 
         question = st.chat_input("Ask a spending question")
         if question:

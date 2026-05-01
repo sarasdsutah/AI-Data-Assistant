@@ -19,6 +19,19 @@ category, or payment-like transaction description identifies the row as a credit
 - Credit card payments may appear as positive `Amount` values and should be filtered out before spending analysis.
 - If future data includes refunds, credits, or reimbursements, review them separately instead of automatically mixing them into spending totals.
 
+## Purchase Detail Questions
+
+- When a user asks what they purchased from Amazon, inspect the cleaned table's `Statement Detail` column in addition to `Description`, `Date`, `Category`, and `Spend`.
+- For supported Amazon Store Card PDF statements, `Description` may identify the transaction row while `Statement Detail` can contain the purchase-level detail exposed by the statement.
+- If `Statement Detail` is blank or unavailable for an Amazon transaction, say that the purchase detail is not available in the uploaded data instead of guessing item names.
+- Use `Spend` for dollar totals and use `Statement Detail` only as descriptive evidence about what was purchased.
+
+## Merchant Interpretation Rules
+
+- If `Description` contains `Booking BV`, interpret it as a Booking.com or Booking Holdings travel purchase.
+- Treat `Booking BV` as most likely lodging or car rental unless other uploaded data explicitly shows a flight or airline purchase.
+- Do not describe `Booking BV` transactions as flight purchases based only on the merchant name.
+
 ## Privacy Boundary
 
 Keep this file focused on analysis rules. Do not add transaction dates, amounts, account identifiers, merchant examples, or row-level personal spending details here.

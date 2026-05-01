@@ -57,6 +57,11 @@ subscriptions.
 `Child/Dependent` includes child-related activities and dependent-care purchases, including
 Thanksgiving Point.
 
+`Travel` includes lodging, car rental, airline, and travel booking platform purchases. A
+`Booking BV` description should be treated as a Booking.com or Booking Holdings travel purchase,
+usually lodging or car rental, and should not be interpreted as a flight purchase unless the
+source data explicitly indicates a flight or airline.
+
 `Groceries` includes grocery stores, supermarkets, and broad household grocery merchants such as
 Costco, Walmart, Target, and Dollar Tree when no earlier, more specific inference rule applies.
 
