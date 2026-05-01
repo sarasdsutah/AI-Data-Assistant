@@ -1,7 +1,7 @@
 # Category Inference Rules
 
-Use these rules when cleaning transaction CSVs, including files that already contain a source
-`Category` column.
+Use these rules when cleaning transaction CSVs or supported PDF statements, including files that
+already contain a source `Category` column.
 
 ## Behavior
 
@@ -18,6 +18,8 @@ The current app uses keyword patterns for these category families:
 - `Credit Card Payments`
 - `Parking`
 - `Gasoline/Fuel`
+- `Subscriptions`
+- `Amazon Shopping`
 - `Groceries`
 - `Coffee & Drinks`
 - `Food Delivery`
@@ -26,7 +28,6 @@ The current app uses keyword patterns for these category families:
 - `Charitable Giving`
 - `Housing/Rent`
 - `Career Growth`
-- `Subscriptions`
 - `Entertainment`
 - `Education`
 - `Insurance`
@@ -44,7 +45,7 @@ The current app uses keyword patterns for these category families:
 DoorDash, Grubhub, Postmates, or Seamless.
 
 `Subscriptions` is intended for recurring monthly or yearly purchases, including Apple bills,
-Prime, Medium, Ring, OpenAI/ChatGPT, Disney Plus, YouTube Premium, and app membership fees
+Prime, Audible, Medium, Ring, OpenAI/ChatGPT, Disney Plus, YouTube Premium, and app membership fees
 such as Uber One, DashPass, Grubhub+, or Instacart+.
 
 `Online Services` is intended for non-recurring or infrastructure-style online services, not

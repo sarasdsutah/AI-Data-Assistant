@@ -10,7 +10,8 @@ Use these rules when analyzing the sample transaction dataset.
 
 ## Current Dataset Rule
 
-Rows with `Category` equal to `Credit Card Payments` should be excluded from spending analysis.
+Rows should be excluded from spending analysis when the cleaned category, original provider
+category, or payment-like transaction description identifies the row as a credit card payment.
 
 ## Amount Handling
 
