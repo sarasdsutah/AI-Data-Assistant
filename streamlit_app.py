@@ -4,6 +4,7 @@ import io
 import os
 import re
 from datetime import date, datetime
+from itertools import combinations
 from pathlib import Path
 
 import altair as alt
@@ -15,7 +16,13 @@ BASE_DIR = Path(__file__).parent
 KNOWLEDGE_DIR = BASE_DIR / "knowledge"
 CATEGORY_RULES_PATH = KNOWLEDGE_DIR / "category_normalization_rules.md"
 SPENDING_ANALYSIS_RULES_PATH = KNOWLEDGE_DIR / "spending_analysis_rules.md"
-EXCLUDED_SPENDING_CATEGORIES = {"Credit Card Payments"}
+CARD_RECOMMENDATIONS_PATH = KNOWLEDGE_DIR / "credit_card_recommendations.md"
+EXCLUDED_SPENDING_CATEGORIES = {"Credit Card Payments", "Internal Transfers", "Investments", "Taxes"}
+BANK_ACCOUNT_KEYWORDS = frozenset(["bank account", "checking", "savings", "high yield", "money market", "debit", "hysa", "brokerage", "investment account"])
+ACCOUNT_CARD_OVERRIDES: dict[str, str] = {
+    "credit card - ending in 4346": "BofA Unlimited Cash Rewards",
+}
+CREDIT_CARD_KEYWORDS = frozenset(["visa", "mastercard", "card", "credit", "amex", "discover", "rewards", "sapphire", "freedom", "preferred", "reserve", "prime store"])
 REQUIRED_COLUMNS = ["Date", "Description"]
 OPTIONAL_TEXT_COLUMNS = ["Account", "Category", "Tags"]
 SOURCE_FILE_COLUMN = "Source File"
@@ -39,30 +46,268 @@ AMAZON_UNREFERENCED_TRANSACTION_PATTERN = re.compile(
     re.DOTALL,
 )
 INFERRED_CATEGORY_RULES = [
+    ("Investments", ["betterment", "my529"]),
+    ("Internal Transfers", ["bank of america", "venmo", "discover bank"]),
     ("Credit Card Payments", ["autopay", "auto-pmt", "payment", "pmt"]),
     ("Parking", ["parking", "garage", "ccri", "honk"]),
+    ("Gasoline/Fuel", ["costco gas station"]),
+    ("Groceries", ["grocery", "groceries", "market", "supermarket", "costco", "walmart", "wal-mart", "target", "dollar tree", "trader joe", "smith", "ocean mart", "harmons", "yami", "yamibuy", "winco food", "mochinut", "7-eleven", "maverik"]),
     ("Gasoline/Fuel", ["gas", "fuel", "gasoline", "holiday", "pilot_"]),
-    ("Subscriptions", ["apple.com/bill", "prime", "audible", "medium.com", "ring.com", "openai", "chatgpt", "disney plus", "disney+", "disneyplus", "youtube premium", "youtubepremium", "uber one", "dashpass", "door dash pass", "doordash pass", "grubhub+", "instacart+"]),
+    ("Online Service & Subscriptions", ["us mobile", "apple.com/bill", "prime", "audible", "medium.com", "ring.com", "openai", "chatgpt", "netflix", "neflix", "disney plus", "disney+", "disneyplus", "youtube premium", "youtubepremium", "uber one", "dashpass", "door dash pass", "doordash pass", "grubhub+", "instacart+", "ipsy"]),
     ("Amazon Shopping", ["amazon", "amzn"]),
-    ("Groceries", ["grocery", "groceries", "market", "supermarket", "costco", "walmart", "wal-mart", "target", "dollar tree", "trader joe", "smith", "ocean mart", "harmons"]),
-    ("Coffee & Drinks", ["coffee", "tea", "milk tea", "boba", "beans & brews", "tiger sugar", "starbucks", "liquor", "wine", "alcohol"]),
+    ("Travel", ["travel", "booking", "hotel", "airline", "air lines", "korean air", "united airlines", "delta air", "cheapoair", "southwest airlines", "american airlines", "airport railroad", "airport", "seoul kr", "rent-a-car"]),
+    ("Coffee & Drinks", ["coffee", "tea", "milk tea", "boba", "beans & brews", "tiger sugar", "starbucks", "meet fresh", "liquor", "wine", "alcohol"]),
     ("Food Delivery", ["uber eats", "ubereats", "doordash", "door dash", "grubhub", "postmates", "seamless", "delivery.com"]),
-    ("Restaurants", ["restaurant", "food", "cafe", "bistro", "sushi", "bbq", "taco", "kitchen", "bakery", "tapas", "greek", "familymart", "tst*", "spitz", "sawadee", "cheesecake", "wiseguys", "concessions", "chick-fil-a", "cluckers", "mcdonald", "indochine", "halalepenos", "grill bar", "ramen"]),
-    ("Online Services", ["online", "software", "cloud", "hosting", "domain", "sourcegraph", "namecheap", "patreon", "digitalocean"]),
+    ("Restaurants", ["restaurant", "food", "cafe", "bistro", "sushi", "bbq", "taco", "kitchen", "bakery", "tapas", "greek", "familymart", "tst*", "spitz", "sawadee", "cheesecake", "wiseguys", "concessions", "chick-fil-a", "cluckers", "mcdonald", "indochine", "halalepenos", "grill bar", "ramen", "carmines", "pizzeria"]),
+    ("Online Service & Subscriptions", ["online", "software", "cloud", "hosting", "domain", "sourcegraph", "namecheap", "name-cheap", "patreon", "digitalocean"]),
+    ("Postage & Shipping & Printing", ["postage", "shipping", "printing", "usps", "ups store", "postnet"]),
     ("Charitable Giving", ["charity", "charitable", "rescue committee"]),
     ("Housing/Rent", ["rentapplication", "rent application"]),
-    ("Career Growth", ["interview", "career", "course", "computing"]),
-    ("Entertainment", ["video", "comedy", "theater", "movie", "youtube", "state parks", "national park", "disney"]),
-    ("Education", ["school", "tuition"]),
+    ("Career Growth", ["interview", "career", "course", "computing", "school", "tuition", "university", "udacity", "scholastic"]),
+    ("Entertainment", ["video", "comedy", "theater", "movie", "cinema", "megaplex", "youtube", "state parks", "national park", "disney"]),
     ("Insurance", ["insurance", "lemonade", "trawick"]),
-    ("Home Improvement", ["home depot", "heating", "air"]),
-    ("Personal Care", ["pharmacy", "spa", "personal care", "walgreens", "hammam", "camera shy"]),
-    ("Clothing/Shoes", ["clothing", "shoes", "nike", "j.crew", "j. crew", "gap", "carter", "outlet", "nordstrom", "marshalls"]),
-    ("Child/Dependent", ["child", "dependent", "kids", "care.com", "dancing", "thanksgiving point"]),
-    ("Travel", ["travel", "booking", "hotel", "airline", "rent-a-car"]),
+    ("Home Improvement", ["home depot", "heating", "lowe's", "lowes", "wayfair", "nursery", "ikea"]),
+    ("Personal Care", ["pharmacy", "spa", "personal care", "walgreens", "hammam", "camera shy", "patrick ta", "partrick ta", "perfumes", "fragrancene"]),
+    ("Clothing/Shoes/Others", ["clothing", "shoes", "nike", "j.crew", "j. crew", "gap", "carter", "outlet", "nordstrom", "marshalls", "macy", "tj maxx", "shein", "temu", "skims"]),
+    ("Child/Dependent", ["child", "dependent", "kids", "care.com", "dancing", "thanksgiving point", "brghtwhl"]),
     ("Automotive", ["automotive", "toll", "udot", "tire", "fab freddy"]),
     ("Other General Merchandise", ["dollar"]),
 ]
+SOURCE_CATEGORY_FALLBACK_RULES = {
+    "Clothing/Shoes": "Clothing/Shoes/Others",
+    "Education": "Career Growth",
+    "Dues & Subscriptions": "Online Service & Subscriptions",
+    "Online Services": "Online Service & Subscriptions",
+    "Other Expenses": "Other",
+    "Postage & Shipping": "Postage & Shipping & Printing",
+    "Printing": "Postage & Shipping & Printing",
+    "Subscriptions": "Online Service & Subscriptions",
+}
+SOURCE_CATEGORY_OVERRIDE_RULES = {
+    "Cable/Satellite": "Online Service & Subscriptions",
+    "Phone Billing": "Online Service & Subscriptions",
+    "Phone Bills": "Online Service & Subscriptions",
+}
+CREDIT_CARD_CATALOG: list[dict] = [
+    {
+        "name": "Citi Double Cash",
+        "issuer": "Citi",
+        "annual_fee": 0,
+        "category_rates": {},
+        "category_caps": {},
+        "default_rate": 0.02,
+        "notes": "2% on all purchases. No annual fee.",
+    },
+    {
+        "name": "Wells Fargo Active Cash",
+        "issuer": "Wells Fargo",
+        "annual_fee": 0,
+        "category_rates": {},
+        "category_caps": {},
+        "default_rate": 0.02,
+        "notes": "2% cash rewards on all purchases. No annual fee.",
+    },
+    {
+        "name": "Chase Freedom Unlimited",
+        "issuer": "Chase",
+        "annual_fee": 0,
+        "category_rates": {
+            "Restaurants": 0.03,
+            "Coffee & Drinks": 0.03,
+            "Food Delivery": 0.03,
+        },
+        "category_caps": {},
+        "default_rate": 0.015,
+        "notes": "3% dining, 1.5% on everything else. No annual fee.",
+    },
+    {
+        "name": "Capital One SavorOne",
+        "issuer": "Capital One",
+        "annual_fee": 0,
+        "category_rates": {
+            "Restaurants": 0.03,
+            "Coffee & Drinks": 0.03,
+            "Food Delivery": 0.03,
+            "Entertainment": 0.03,
+            "Online Service & Subscriptions": 0.03,
+            "Groceries": 0.03,
+        },
+        "category_caps": {},
+        "default_rate": 0.01,
+        "notes": "3% dining, entertainment, streaming, and grocery stores. 1% elsewhere. No annual fee.",
+    },
+    {
+        "name": "Discover It Cash Back",
+        "issuer": "Discover",
+        "annual_fee": 0,
+        "category_rates": {},
+        "category_caps": {},
+        "default_rate": 0.01,
+        "quarterly_bonus_rate": 0.05,
+        "quarterly_cap": 1500.0,
+        "quarterly_categories": {
+            1: ["Restaurants", "Coffee & Drinks", "Food Delivery"],
+            2: ["Gasoline/Fuel", "Home Improvement"],
+            3: ["Groceries"],
+            4: ["Amazon Shopping", "Groceries", "Online Service & Subscriptions"],
+        },
+        "notes": "5% on rotating categories each quarter (up to $1,500/quarter), 1% elsewhere. "
+                 "Q1: dining. Q2: gas & home improvement. Q3: groceries. Q4: Amazon & online shopping. "
+                 "No annual fee. Actual quarterly categories vary year to year.",
+    },
+    {
+        "name": "Amex Blue Cash Everyday",
+        "issuer": "American Express",
+        "annual_fee": 0,
+        "category_rates": {
+            "Groceries": 0.03,
+            "Amazon Shopping": 0.03,
+            "Gasoline/Fuel": 0.03,
+        },
+        "category_caps": {
+            "Groceries": 6000.0,
+        },
+        "default_rate": 0.01,
+        "notes": "3% US supermarkets (up to $6K/yr), 3% US online retail, 3% US gas. 1% elsewhere. No annual fee.",
+    },
+    {
+        "name": "BofA Unlimited Cash Rewards",
+        "issuer": "Bank of America",
+        "annual_fee": 0,
+        "category_rates": {},
+        "category_caps": {},
+        "default_rate": 0.015,
+        "notes": "1.5% cash back on all purchases. No caps, no annual fee.",
+    },
+    {
+        "name": "BofA Customized Cash Rewards (Dining)",
+        "issuer": "Bank of America",
+        "annual_fee": 0,
+        "category_rates": {
+            "Restaurants": 0.03,
+            "Coffee & Drinks": 0.03,
+            "Food Delivery": 0.03,
+            "Groceries": 0.02,
+        },
+        "category_caps": {
+            "Restaurants": 10000.0,
+            "Coffee & Drinks": 10000.0,
+            "Food Delivery": 10000.0,
+            "Groceries": 10000.0,
+        },
+        "default_rate": 0.01,
+        "notes": "3% on dining, 2% grocery & wholesale clubs (combined $2,500/quarter cap), 1% elsewhere. No annual fee. Choice category set to Dining.",
+    },
+    {
+        "name": "Costco Anywhere Visa",
+        "issuer": "Citi",
+        "annual_fee": 0,
+        "category_rates": {
+            "Gasoline/Fuel": 0.04,
+            "Restaurants": 0.03,
+            "Coffee & Drinks": 0.03,
+            "Food Delivery": 0.03,
+            "Travel": 0.03,
+            "Groceries": 0.02,
+        },
+        "category_caps": {
+            "Gasoline/Fuel": 7000.0,
+        },
+        "default_rate": 0.01,
+        "notes": "4% gas (up to $7K/yr), 3% dining & travel, 2% Costco purchases, 1% elsewhere. No annual fee (requires Costco membership ~$65/yr).",
+    },
+    {
+        "name": "Amazon Store Card",
+        "issuer": "Synchrony",
+        "annual_fee": 0,
+        "category_rates": {
+            "Amazon Shopping": 0.05,
+        },
+        "category_caps": {},
+        "default_rate": 0.0,
+        "all_spending_rate": 0.05,
+        "notes": "5% on Amazon purchases (Prime members). Only usable at Amazon — cannot earn rewards on other spending. No annual fee.",
+    },
+    {
+        "name": "Amazon Prime Visa",
+        "issuer": "Chase",
+        "annual_fee": 0,
+        "category_rates": {
+            "Amazon Shopping": 0.05,
+            "Restaurants": 0.02,
+            "Coffee & Drinks": 0.02,
+            "Food Delivery": 0.02,
+            "Gasoline/Fuel": 0.02,
+            "Parking": 0.02,
+        },
+        "category_caps": {},
+        "default_rate": 0.01,
+        "notes": "5% Amazon & Whole Foods, 2% dining/gas/transit, 1% elsewhere. No annual fee (requires Amazon Prime ~$139/yr).",
+    },
+    {
+        "name": "Chase Sapphire Preferred",
+        "issuer": "Chase",
+        "annual_fee": 95,
+        "category_rates": {
+            "Restaurants": 0.0375,
+            "Coffee & Drinks": 0.0375,
+            "Food Delivery": 0.0375,
+            "Travel": 0.025,
+            "Online Service & Subscriptions": 0.0375,
+        },
+        "category_caps": {},
+        "default_rate": 0.0125,
+        "notes": "3x dining & streaming, 2x travel. Points at 1.25¢ via Chase portal. $95 annual fee.",
+    },
+    {
+        "name": "Amex Blue Cash Preferred",
+        "issuer": "American Express",
+        "annual_fee": 95,
+        "category_rates": {
+            "Groceries": 0.06,
+            "Online Service & Subscriptions": 0.06,
+            "Gasoline/Fuel": 0.03,
+        },
+        "category_caps": {
+            "Groceries": 6000.0,
+        },
+        "default_rate": 0.01,
+        "notes": "6% US supermarkets (up to $6K/yr), 6% streaming, 3% US gas. 1% elsewhere. $95 annual fee.",
+    },
+    {
+        "name": "Amex Gold",
+        "issuer": "American Express",
+        "annual_fee": 250,
+        "category_rates": {
+            "Restaurants": 0.04,
+            "Coffee & Drinks": 0.04,
+            "Food Delivery": 0.04,
+            "Groceries": 0.04,
+            "Travel": 0.03,
+        },
+        "category_caps": {
+            "Groceries": 25000.0,
+        },
+        "default_rate": 0.01,
+        "notes": "4x dining & US supermarkets, 3x flights. MR points at 1¢ (transfer partners worth more). $250 annual fee (includes $120 dining + $120 Uber Cash credits).",
+    },
+    {
+        "name": "Chase Sapphire Reserve",
+        "issuer": "Chase",
+        "annual_fee": 550,
+        "category_rates": {
+            "Restaurants": 0.045,
+            "Coffee & Drinks": 0.045,
+            "Food Delivery": 0.045,
+            "Travel": 0.045,
+            "Parking": 0.045,
+        },
+        "category_caps": {},
+        "default_rate": 0.015,
+        "notes": "3x dining & travel. Points at 1.5¢ via Chase portal. $550 annual fee (includes $300 travel credit).",
+    },
+]
+
 CATEGORY_COLOR_RANGE = [
     "#4E79A7",
     "#F28E2B",
@@ -97,8 +342,16 @@ st.set_page_config(
 )
 
 
+def file_cache_signature(path: Path) -> tuple[int, int]:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return (0, 0)
+    return (stat.st_mtime_ns, stat.st_size)
+
+
 @st.cache_data
-def load_category_rules(path: str) -> dict[str, str]:
+def load_category_rules(path: str, file_signature: tuple[int, int] | None = None) -> dict[str, str]:
     rules: dict[str, str] = {}
     rules_path = Path(path)
     if not rules_path.exists():
@@ -114,7 +367,7 @@ def load_category_rules(path: str) -> dict[str, str]:
 
 
 @st.cache_data
-def load_knowledge_text(path: str) -> str:
+def load_knowledge_text(path: str, file_signature: tuple[int, int] | None = None) -> str:
     knowledge_path = Path(path)
     if not knowledge_path.exists():
         return ""
@@ -439,15 +692,33 @@ def prepare_transactions(raw_df: pd.DataFrame, category_rules: dict[str, str]) -
 
     inferred_categories = df["Description"].apply(infer_category)
     exact_rule_categories = df["Description"].map(category_rules)
-    df["Category"] = exact_rule_categories.fillna(inferred_categories)
+    conditional_rule_categories = apply_conditional_category_rules(df)
+    source_override_categories = df["Original Category"].map(SOURCE_CATEGORY_OVERRIDE_RULES)
+    knowledge_rule_categories = (
+        exact_rule_categories
+        .fillna(conditional_rule_categories)
+        .fillna(source_override_categories)
+    )
+    source_categories = df["Original Category"].replace("", pd.NA).replace(SOURCE_CATEGORY_FALLBACK_RULES)
+    inferred_category_mask = knowledge_rule_categories.isna() & inferred_categories.ne(DEFAULT_CATEGORY)
+    source_category_mask = (
+        knowledge_rule_categories.isna()
+        & inferred_categories.eq(DEFAULT_CATEGORY)
+        & source_categories.notna()
+    )
+
+    df["Category"] = knowledge_rule_categories.fillna(inferred_categories)
+    df.loc[source_category_mask, "Category"] = source_categories[source_category_mask]
     df["Category"] = df["Category"].fillna(DEFAULT_CATEGORY).replace("", DEFAULT_CATEGORY)
     df["Category Normalized"] = (
         (df["Original Category"] != "")
         & (df["Category"] != df["Original Category"])
     )
-    df["Category Inferred"] = exact_rule_categories.isna()
-    df["Category Source"] = "inferred"
-    df.loc[exact_rule_categories.notna(), "Category Source"] = "knowledge rule"
+    df["Category Inferred"] = inferred_category_mask
+    df["Category Source"] = "default"
+    df.loc[inferred_category_mask, "Category Source"] = "inferred"
+    df.loc[source_category_mask, "Category Source"] = "source category"
+    df.loc[knowledge_rule_categories.notna(), "Category Source"] = "knowledge rule"
 
     valid_amount = df["Amount"].notna()
     payment_mask = payment_transaction_mask(df)
@@ -510,6 +781,16 @@ def parse_money_series(series: pd.Series) -> pd.Series:
         .str.replace(r"^\((.*)\)$", r"-\1", regex=True)
     )
     return pd.to_numeric(cleaned.replace("", pd.NA), errors="coerce")
+
+
+def apply_conditional_category_rules(df: pd.DataFrame) -> pd.Series:
+    categories = pd.Series(pd.NA, index=df.index, dtype="object")
+    exact_apple_small_charge = (
+        df["Description"].str.strip().str.casefold().eq("apple")
+        & df["Amount"].abs().lt(100)
+    )
+    categories.loc[exact_apple_small_charge] = "Online Service & Subscriptions"
+    return categories
 
 
 def infer_category(description: object) -> str:
@@ -707,6 +988,7 @@ def build_specific_category_answer(spending_df: pd.DataFrame, category: str) -> 
 def build_data_quality_answer(df: pd.DataFrame, spending_df: pd.DataFrame) -> tuple[str, pd.DataFrame]:
     exact_rules = int((df["Category Source"] == "knowledge rule").sum())
     inferred = int(df["Category Inferred"].sum())
+    source_categories = int((df["Category Source"] == "source category").sum())
     recategorized = int(df["Category Normalized"].sum())
     invalid_dates = int(df["Date"].isna().sum())
     invalid_amounts = int(df["Amount"].isna().sum())
@@ -716,6 +998,7 @@ def build_data_quality_answer(df: pd.DataFrame, spending_df: pd.DataFrame) -> tu
         f"{len(spending_df):,} rows are available for spending analysis. "
         f"{exact_rules:,} rows used exact knowledge rules. "
         f"{inferred:,} rows used inferred categories. "
+        f"{source_categories:,} rows kept source categories after no inference rule matched. "
         f"{recategorized:,} provider categories were replaced by app categories. "
         f"Invalid dates: {invalid_dates:,}. Invalid amounts: {invalid_amounts:,}."
     )
@@ -726,6 +1009,7 @@ def build_data_quality_answer(df: pd.DataFrame, spending_df: pd.DataFrame) -> tu
             {"Check": "Rows used for spending analysis", "Count": len(spending_df)},
             {"Check": "Rows using exact knowledge rules", "Count": exact_rules},
             {"Check": "Rows using inferred categories", "Count": inferred},
+            {"Check": "Rows using source category fallback", "Count": source_categories},
             {"Check": "Provider categories replaced", "Count": recategorized},
             {"Check": "Rows with invalid dates", "Count": invalid_dates},
             {"Check": "Rows with invalid amounts", "Count": invalid_amounts},
@@ -764,7 +1048,14 @@ def dataframe_csv_text(df: pd.DataFrame, columns: list[str]) -> str:
 
 def build_chat_dataset_context(df: pd.DataFrame, spending_df: pd.DataFrame) -> str:
     quality_answer, quality_checks = build_data_quality_answer(df, spending_df)
-    spending_analysis_rules = load_knowledge_text(str(SPENDING_ANALYSIS_RULES_PATH))
+    spending_analysis_rules = load_knowledge_text(
+        str(SPENDING_ANALYSIS_RULES_PATH),
+        file_cache_signature(SPENDING_ANALYSIS_RULES_PATH),
+    )
+    card_recommendations_knowledge = load_knowledge_text(
+        str(CARD_RECOMMENDATIONS_PATH),
+        file_cache_signature(CARD_RECOMMENDATIONS_PATH),
+    )
     category_csv = category_summary(spending_df).to_csv(index=False)
     monthly_csv = monthly_summary(spending_df).to_csv(index=False)
     monthly_category_csv = monthly_category_summary(spending_df).to_csv(index=False)
@@ -778,7 +1069,6 @@ def build_chat_dataset_context(df: pd.DataFrame, spending_df: pd.DataFrame) -> s
             "Statement Detail",
             "Category",
             "Category Source",
-            "Original Category",
             "Amount",
             "Spend",
         ],
@@ -796,9 +1086,13 @@ Important analysis rules:
 - Credit card payment/payback rows have already been excluded from the spending CSV.
 - Use the CSV and summaries below as the source of truth. If the data does not support an answer, say so.
 - Do not invent merchants, categories, dates, or amounts.
+- When estimating annual rewards, group spending by the cleaned `Category` column and apply reward rates using that category. Do not re-infer or override categories from merchant descriptions.
 
 Knowledge analysis rules:
 {spending_analysis_rules or "No additional knowledge analysis rules loaded."}
+
+Credit card reward knowledge:
+{card_recommendations_knowledge or "No credit card reward knowledge loaded."}
 
 Overview:
 {build_overview(spending_df)}
@@ -892,16 +1186,17 @@ def answer_question(question: str, df: pd.DataFrame, spending_df: pd.DataFrame) 
         answer, table = build_data_quality_answer(df, spending_df)
         return answer, table, "Data Checks"
 
-    if any(term in normalized_question for term in ["subscription", "subscriptions", "apple.com/bill", "prime", "medium", "ring", "openai", "chatgpt", "disney plus", "disney+", "youtube premium"]):
-        answer, table = build_specific_category_answer(spending_df, "Subscriptions")
-        return answer, table, "Subscriptions"
+    if any(term in normalized_question for term in ["online service", "online services", "subscription", "subscriptions", "phone", "phone bill", "phone billing", "mobile", "us mobile", "apple.com/bill", "prime", "medium", "ring", "openai", "chatgpt", "disney plus", "disney+", "youtube premium"]):
+        answer, table = build_specific_category_answer(spending_df, "Online Service & Subscriptions")
+        return answer, table, "Online Service & Subscriptions"
 
     if any(term in normalized_question for term in ["month", "monthly", "date", "trend", "time"]):
         answer, table = build_time_answer(spending_df)
         return answer, table, "Monthly Spend"
 
     category_terms = {
-        "Coffee & Drinks": ["tea", "coffee", "milk tea", "tiger sugar", "wine", "alcohol", "liquor"],
+        "Groceries": ["grocery", "groceries", "online grocery", "online groceries", "yami", "yamibuy"],
+        "Coffee & Drinks": ["tea", "coffee", "milk tea", "tiger sugar", "meet fresh", "wine", "alcohol", "liquor"],
         "Food Delivery": ["delivery", "food delivery", "uber eats", "ubereats", "doordash", "door dash", "grubhub", "postmates", "seamless"],
         "Parking": ["parking", "airgarage", "ccri"],
         "Career Growth": ["career", "interview", "growth"],
@@ -1021,6 +1316,7 @@ def render_transaction_detail_table(details: pd.DataFrame) -> None:
         hide_index=True,
         use_container_width=True,
         column_config={
+            "Category": st.column_config.TextColumn("Cleaned Category"),
             "Spend": st.column_config.NumberColumn("Spend", format="$%.2f"),
         },
     )
@@ -1469,11 +1765,583 @@ def make_unique_source_names(source_names: list[str]) -> list[str]:
     return unique_names
 
 
+def classify_account(account: str) -> str:
+    lower = account.strip().lower()
+    if not lower:
+        return "unknown"
+    if any(kw in lower for kw in CREDIT_CARD_KEYWORDS):
+        return "credit_card"
+    if any(kw in lower for kw in BANK_ACCOUNT_KEYWORDS):
+        return "bank_account"
+    return "unknown"
+
+
+def filter_credit_card_eligible_spending(spending_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split spending into (credit_card_eligible, bank_only).
+
+    A transaction is bank-only when its Description never appears in any non-bank-account
+    transaction, meaning it can't be paid by credit card.
+    """
+    if spending_df.empty or "Account" not in spending_df.columns:
+        return spending_df, pd.DataFrame(columns=spending_df.columns)
+
+    account_types = spending_df["Account"].fillna("").astype(str).map(classify_account)
+
+    if not (account_types == "bank_account").any():
+        return spending_df, pd.DataFrame(columns=spending_df.columns)
+
+    cc_descriptions = set(
+        spending_df.loc[account_types != "bank_account", "Description"].unique()
+    )
+    bank_only_mask = (account_types == "bank_account") & ~spending_df["Description"].isin(cc_descriptions)
+
+    return spending_df[~bank_only_mask].copy(), spending_df[bank_only_mask].copy()
+
+
+def annualization_factor(spending_df: pd.DataFrame) -> float:
+    valid_dates = spending_df["Date"].dropna()
+    if valid_dates.empty:
+        return 1.0
+    days = max((valid_dates.max() - valid_dates.min()).days + 1, 1)
+    return 365.0 / days
+
+
+def _standard_card_rewards(category: str, annualized_spend: float, card: dict) -> float:
+    rate = card["category_rates"].get(category, card["default_rate"])
+    cap = card["category_caps"].get(category)
+    if cap is not None:
+        return min(annualized_spend, cap) * rate + max(annualized_spend - cap, 0.0) * card["default_rate"]
+    return annualized_spend * rate
+
+
+def _best_rewards_across_cards(category: str, annualized_spend: float, cards: list[dict]) -> float:
+    return max((_standard_card_rewards(category, annualized_spend, c) for c in cards), default=0.0)
+
+
+def _quarterly_df(spending_df: pd.DataFrame) -> pd.DataFrame:
+    df = spending_df.dropna(subset=["Date"]).copy()
+    df["_Q"] = df["Date"].dt.quarter
+    df["_Y"] = df["Date"].dt.year
+    return df
+
+
+def _estimate_quarterly_rewards(spending_df: pd.DataFrame, card: dict, factor: float) -> float:
+    df = _quarterly_df(spending_df)
+    if df.empty:
+        return 0.0
+    quarterly_cats = card["quarterly_categories"]
+    cap = card["quarterly_cap"]
+    bonus_rate = card["quarterly_bonus_rate"]
+    default_rate = card["default_rate"]
+    total = 0.0
+    for (_, quarter), qdf in df.groupby(["_Y", "_Q"]):
+        bonus_cats = set(quarterly_cats.get(quarter, []))
+        cat_spends = qdf.groupby("Category")["Spend"].sum()
+        bonus_spend = float(cat_spends[cat_spends.index.isin(bonus_cats)].sum())
+        other_spend = float(cat_spends[~cat_spends.index.isin(bonus_cats)].sum())
+        capped = min(bonus_spend, cap)
+        overflow = max(bonus_spend - cap, 0.0)
+        total += capped * bonus_rate + overflow * default_rate + other_spend * default_rate
+    return total * factor
+
+
+def estimate_card_annual_rewards(spending_df: pd.DataFrame, card: dict, factor: float | None = None) -> float:
+    if spending_df.empty:
+        return 0.0
+    if factor is None:
+        factor = annualization_factor(spending_df)
+    if "quarterly_categories" in card:
+        return _estimate_quarterly_rewards(spending_df, card, factor)
+    default_rate = card.get("default_rate", 0.01)
+    total = 0.0
+    for category, spend in spending_df.groupby("Category")["Spend"].sum().items():
+        total += _standard_card_rewards(str(category), float(spend) * factor, card)
+    return total
+
+
+def detect_credit_card_accounts(spending_df: pd.DataFrame) -> list[str]:
+    if "Account" not in spending_df.columns:
+        return []
+    accounts = spending_df["Account"].fillna("").astype(str).unique()
+    return sorted(a for a in accounts if a and classify_account(a) in ("credit_card", "unknown"))
+
+
+def auto_match_account_to_card(account: str) -> str | None:
+    account_lower = account.strip().lower()
+    if account_lower in ACCOUNT_CARD_OVERRIDES:
+        return ACCOUNT_CARD_OVERRIDES[account_lower]
+    if "unlimited cash" in account_lower:
+        return "BofA Unlimited Cash Rewards"
+    if "customized cash" in account_lower or "custom cash" in account_lower:
+        return "BofA Customized Cash Rewards (Dining)"
+    if "discover it" in account_lower or ("discover" in account_lower and "bank" not in account_lower):
+        return "Discover It Cash Back"
+    for card in CREDIT_CARD_CATALOG:
+        if card["name"].lower() in account_lower:
+            return card["name"]
+    return None
+
+
+def build_card_recommendations(spending_df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for card in CREDIT_CARD_CATALOG:
+        annual_rewards = estimate_card_annual_rewards(spending_df, card)
+        annual_fee = card["annual_fee"]
+        rows.append({
+            "Card": card["name"],
+            "Issuer": card["issuer"],
+            "Est. Annual Rewards": annual_rewards,
+            "Annual Fee": annual_fee,
+            "Est. Net Value": annual_rewards - annual_fee,
+        })
+    return (
+        pd.DataFrame(rows)
+        .sort_values("Est. Net Value", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
+def build_card_category_breakdown(spending_df: pd.DataFrame, card: dict) -> pd.DataFrame:
+    if spending_df.empty:
+        return pd.DataFrame()
+    factor = annualization_factor(spending_df)
+    default_rate = card.get("default_rate", 0.01)
+    rows = []
+
+    if "quarterly_categories" in card:
+        quarterly_cats = card["quarterly_categories"]
+        bonus_rate = card["quarterly_bonus_rate"]
+        cap = card["quarterly_cap"]
+        all_bonus_cats: set[str] = {cat for cats in quarterly_cats.values() for cat in cats}
+        active_quarters: dict[str, list[int]] = {}
+        for q, cats in quarterly_cats.items():
+            for cat in cats:
+                active_quarters.setdefault(cat, []).append(q)
+        df = _quarterly_df(spending_df)
+        cat_rewards: dict[str, float] = {}
+        cat_annualized: dict[str, float] = {}
+        for (_, quarter), qdf in df.groupby(["_Y", "_Q"]):
+            bonus_cats = set(quarterly_cats.get(quarter, []))
+            cat_spends = qdf.groupby("Category")["Spend"].sum()
+            bonus_spend = float(cat_spends[cat_spends.index.isin(bonus_cats)].sum())
+            remaining = cap
+            for category, spend in cat_spends.items():
+                category = str(category)
+                annualized = float(spend) * factor
+                cat_annualized[category] = cat_annualized.get(category, 0.0) + annualized
+                if category in bonus_cats and remaining > 0:
+                    b = min(annualized, remaining)
+                    ov = max(annualized - remaining, 0.0)
+                    r = b * bonus_rate + ov * default_rate
+                    remaining = max(remaining - annualized, 0.0)
+                else:
+                    r = annualized * default_rate
+                cat_rewards[category] = cat_rewards.get(category, 0.0) + r
+        for category, rewards in cat_rewards.items():
+            ann_spend = cat_annualized.get(category, 0.0)
+            eff_rate = rewards / ann_spend if ann_spend > 0 else default_rate
+            qs = active_quarters.get(category, [])
+            rate_label = f"{eff_rate * 100:.2g}% (5% in Q{'/Q'.join(str(q) for q in sorted(qs))})" if qs else f"{eff_rate * 100:.2g}%"
+            rows.append({
+                "Category": category,
+                "Rate": rate_label,
+                "Est. Annual Spend": ann_spend,
+                "Est. Annual Rewards": rewards,
+            })
+    else:
+        for category, spend in spending_df.groupby("Category")["Spend"].sum().items():
+            category = str(category)
+            annualized = float(spend) * factor
+            rewards = _standard_card_rewards(category, annualized, card)
+            rate = card["category_rates"].get(category, default_rate)
+            rows.append({
+                "Category": category,
+                "Rate": f"{rate * 100:.2g}%",
+                "Est. Annual Spend": annualized,
+                "Est. Annual Rewards": rewards,
+            })
+
+    return (
+        pd.DataFrame(rows)
+        .sort_values("Est. Annual Rewards", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
+def estimate_combo_annual_rewards(spending_df: pd.DataFrame, cards: list[dict]) -> float:
+    if spending_df.empty:
+        return 0.0
+    factor = annualization_factor(spending_df)
+    standard_cards = [c for c in cards if "quarterly_categories" not in c]
+    quarterly_cards = [c for c in cards if "quarterly_categories" in c]
+
+    if not quarterly_cards:
+        total = 0.0
+        for category, spend in spending_df.groupby("Category")["Spend"].sum().items():
+            total += _best_rewards_across_cards(str(category), float(spend) * factor, cards)
+        return total
+
+    # Process quarter by quarter to respect each quarterly card's per-quarter cap
+    df = _quarterly_df(spending_df)
+    if df.empty:
+        return 0.0
+    total = 0.0
+    for (_, quarter), qdf in df.groupby(["_Y", "_Q"]):
+        cat_spends = {
+            str(cat): float(spend) * factor
+            for cat, spend in qdf.groupby("Category")["Spend"].sum().items()
+        }
+        # Baseline: best rewards from standard cards only
+        quarter_rewards = {
+            cat: _best_rewards_across_cards(cat, spend, standard_cards)
+            for cat, spend in cat_spends.items()
+        }
+        # Try to improve each category using quarterly cards
+        for qc in quarterly_cards:
+            bonus_cats = set(qc["quarterly_categories"].get(quarter, []))
+            remaining_cap = qc["quarterly_cap"]
+            bonus_rate = qc["quarterly_bonus_rate"]
+            default_rate = qc["default_rate"]
+            # Prioritise categories with the highest marginal gain per dollar
+            candidates = []
+            for cat in bonus_cats:
+                if cat not in cat_spends:
+                    continue
+                spend = cat_spends[cat]
+                std = quarter_rewards[cat]
+                marginal_rate = bonus_rate - (std / spend if spend > 0 else 0)
+                if marginal_rate > 0:
+                    candidates.append((marginal_rate, cat, spend, std))
+            candidates.sort(reverse=True)
+            for _, cat, spend, std in candidates:
+                if remaining_cap <= 0:
+                    break
+                bonus_spend = min(spend, remaining_cap)
+                overflow = max(spend - remaining_cap, 0.0)
+                qc_rewards = bonus_spend * bonus_rate + overflow * default_rate
+                std_overflow = _best_rewards_across_cards(cat, overflow, standard_cards) if overflow > 0 else 0.0
+                combined = bonus_spend * bonus_rate + std_overflow
+                if combined > std:
+                    quarter_rewards[cat] = combined
+                remaining_cap = max(remaining_cap - spend, 0.0)
+        total += sum(quarter_rewards.values())
+    return total
+
+
+def build_combo_recommendations(spending_df: pd.DataFrame, card_count: int, top_n: int = 5) -> tuple[pd.DataFrame, list[list[dict]]]:
+    ranked: list[tuple[float, float, float, list[dict]]] = []
+    for combo in combinations(CREDIT_CARD_CATALOG, card_count):
+        combo_list = list(combo)
+        annual_rewards = estimate_combo_annual_rewards(spending_df, combo_list)
+        total_fee = sum(card["annual_fee"] for card in combo_list)
+        net_value = annual_rewards - total_fee
+        ranked.append((net_value, annual_rewards, total_fee, combo_list))
+    ranked.sort(key=lambda x: x[0], reverse=True)
+
+    rows = []
+    card_combos: list[list[dict]] = []
+    for net_value, annual_rewards, total_fee, combo_list in ranked[:top_n]:
+        rows.append({
+            "Cards": " + ".join(c["name"] for c in combo_list),
+            "Est. Annual Rewards": annual_rewards,
+            "Total Annual Fees": total_fee,
+            "Est. Net Value": net_value,
+        })
+        card_combos.append(combo_list)
+    return pd.DataFrame(rows), card_combos
+
+
+def _quarterly_rewards_by_category(spending_df: pd.DataFrame, card: dict, factor: float) -> dict[str, float]:
+    df = _quarterly_df(spending_df)
+    if df.empty:
+        return {}
+    quarterly_cats = card["quarterly_categories"]
+    cap = card["quarterly_cap"]
+    bonus_rate = card["quarterly_bonus_rate"]
+    default_rate = card["default_rate"]
+    cat_rewards: dict[str, float] = {}
+    for (_, quarter), qdf in df.groupby(["_Y", "_Q"]):
+        bonus_cats = set(quarterly_cats.get(quarter, []))
+        remaining = cap
+        for category, spend in qdf.groupby("Category")["Spend"].sum().items():
+            category = str(category)
+            annualized = float(spend) * factor
+            if category in bonus_cats and remaining > 0:
+                b = min(annualized, remaining)
+                r = b * bonus_rate + max(annualized - remaining, 0.0) * default_rate
+                remaining = max(remaining - annualized, 0.0)
+            else:
+                r = annualized * default_rate
+            cat_rewards[category] = cat_rewards.get(category, 0.0) + r
+    return cat_rewards
+
+
+def build_combo_category_breakdown(spending_df: pd.DataFrame, cards: list[dict]) -> pd.DataFrame:
+    if spending_df.empty:
+        return pd.DataFrame()
+    factor = annualization_factor(spending_df)
+
+    # Pre-compute per-category rewards for each card
+    card_cat_rewards: dict[str, dict[str, float]] = {}
+    for card in cards:
+        if "quarterly_categories" in card:
+            card_cat_rewards[card["name"]] = _quarterly_rewards_by_category(spending_df, card, factor)
+        else:
+            card_cat_rewards[card["name"]] = {}
+
+    all_categories = spending_df["Category"].dropna().astype(str).unique()
+    cat_annualized = {
+        str(cat): float(spend) * factor
+        for cat, spend in spending_df.groupby("Category")["Spend"].sum().items()
+    }
+
+    # Build lookup: card_name -> quarterly_categories for quarterly cards in this combo
+    quarterly_cat_map: dict[str, dict[int, list[str]]] = {
+        card["name"]: card["quarterly_categories"]
+        for card in cards if "quarterly_categories" in card
+    }
+
+    rows = []
+    for category in all_categories:
+        annualized = cat_annualized.get(category, 0.0)
+        best_rewards = 0.0
+        best_card_name = ""
+        best_rate = 0.0
+        for card in cards:
+            if "quarterly_categories" in card:
+                rewards = card_cat_rewards[card["name"]].get(category, annualized * card["default_rate"])
+            else:
+                rewards = _standard_card_rewards(category, annualized, card)
+            eff_rate = rewards / annualized if annualized > 0 else 0.0
+            if rewards > best_rewards:
+                best_rewards = rewards
+                best_card_name = card["name"]
+                best_rate = eff_rate
+
+        # Determine when to use this card
+        if best_card_name in quarterly_cat_map:
+            active_quarters = sorted(
+                q for q, cats in quarterly_cat_map[best_card_name].items()
+                if category in cats
+            )
+            if active_quarters:
+                quarter_labels = {1: "Q1 (Jan–Mar)", 2: "Q2 (Apr–Jun)", 3: "Q3 (Jul–Sep)", 4: "Q4 (Oct–Dec)"}
+                when = " & ".join(quarter_labels[q] for q in active_quarters)
+            else:
+                when = "Annual"
+        else:
+            when = "Annual"
+
+        rows.append({
+            "Category": category,
+            "Use Card": best_card_name,
+            "When to Use": when,
+            "Rate": f"{best_rate * 100:.2g}%",
+            "Est. Annual Spend": annualized,
+            "Est. Annual Rewards": best_rewards,
+        })
+    return (
+        pd.DataFrame(rows)
+        .sort_values("Est. Annual Rewards", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
+def render_combo_section(spending_df: pd.DataFrame, card_count: int) -> None:
+    combos_df, card_combos = build_combo_recommendations(spending_df, card_count)
+    if combos_df.empty:
+        return
+    st.dataframe(
+        combos_df,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
+            "Total Annual Fees": st.column_config.NumberColumn("Total Annual Fees", format="$%.0f"),
+            "Est. Net Value": st.column_config.NumberColumn("Est. Net Value", format="$%.2f"),
+        },
+    )
+    combo_labels = combos_df["Cards"].tolist()
+    selected_label = st.selectbox(
+        "Show category breakdown for:",
+        combo_labels,
+        key=f"combo_{card_count}_breakdown_select",
+    )
+    selected_idx = combo_labels.index(selected_label)
+    selected_combo = card_combos[selected_idx]
+    breakdown = build_combo_category_breakdown(spending_df, selected_combo)
+    if not breakdown.empty:
+        st.markdown(f"**Category assignments: {selected_label}**")
+        st.dataframe(
+            breakdown,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Est. Annual Spend": st.column_config.NumberColumn("Est. Annual Spend", format="$%.2f"),
+                "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
+            },
+        )
+
+
+def render_current_card_performance(eligible_df: pd.DataFrame) -> None:
+    st.subheader("Your Current Cards")
+
+    cc_accounts = detect_credit_card_accounts(eligible_df)
+    if not cc_accounts:
+        st.info("No credit card accounts detected in the loaded data.")
+        return
+
+    card_options = ["— select card —"] + [c["name"] for c in CREDIT_CARD_CATALOG]
+    global_factor = annualization_factor(eligible_df)
+
+    account_card_map: dict[str, str] = {}
+    for account in cc_accounts:
+        auto = auto_match_account_to_card(account)
+        default_idx = card_options.index(auto) if auto and auto in card_options else 0
+        selected = st.selectbox(
+            f"Account: **{account}**",
+            card_options,
+            index=default_idx,
+            key=f"current_card_{account}",
+        )
+        if selected != "— select card —":
+            account_card_map[account] = selected
+
+    if not account_card_map:
+        st.caption("Select a card for each account above to see current reward estimates.")
+        return
+
+    rows = []
+    for account, card_name in account_card_map.items():
+        card = next((c for c in CREDIT_CARD_CATALOG if c["name"] == card_name), None)
+        if card is None:
+            continue
+        account_df = eligible_df[eligible_df["Account"].fillna("").astype(str) == account]
+        if "all_spending_rate" in card:
+            annual_rewards = float(account_df["Spend"].sum()) * global_factor * card["all_spending_rate"]
+        else:
+            annual_rewards = estimate_card_annual_rewards(account_df, card, factor=global_factor)
+        rows.append({
+            "Account": account,
+            "Card": card_name,
+            "Est. Annual Rewards": annual_rewards,
+            "Annual Fee": float(card["annual_fee"]),
+            "Est. Net Value": annual_rewards - card["annual_fee"],
+        })
+
+    if not rows:
+        return
+
+    totals = {
+        "Account": "Total",
+        "Card": "",
+        "Est. Annual Rewards": sum(r["Est. Annual Rewards"] for r in rows),
+        "Annual Fee": sum(r["Annual Fee"] for r in rows),
+        "Est. Net Value": sum(r["Est. Net Value"] for r in rows),
+    }
+    rows.append(totals)
+
+    st.dataframe(
+        pd.DataFrame(rows),
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
+            "Annual Fee": st.column_config.NumberColumn("Annual Fee", format="$%.0f"),
+            "Est. Net Value": st.column_config.NumberColumn("Est. Net Value", format="$%.2f"),
+        },
+    )
+
+
+def render_card_recommendations(spending_df: pd.DataFrame) -> None:
+    if spending_df.empty:
+        st.write("No spending data available for recommendations.")
+        return
+
+    valid_dates = spending_df["Date"].dropna()
+    if valid_dates.empty:
+        return
+
+    eligible_df, bank_only_df = filter_credit_card_eligible_spending(spending_df)
+
+    days = (valid_dates.max() - valid_dates.min()).days + 1
+    months = days / 30.44
+    st.caption(
+        f"Estimates based on {months:.1f} months of data, annualized to a full year. "
+        "Reward rates use cash-back equivalent values. Caps are modeled; intro bonuses and "
+        "statement credits are noted per card but not deducted from the fee."
+    )
+
+    if not bank_only_df.empty:
+        excluded_spend = bank_only_df["Spend"].sum()
+        excluded_categories = bank_only_df["Category"].value_counts().head(5)
+        category_list = ", ".join(
+            f"{cat} ({count})" for cat, count in excluded_categories.items()
+        )
+        st.warning(
+            f"**{len(bank_only_df):,} transactions (${excluded_spend:,.2f} annualized) excluded** — "
+            f"these merchants only appear in bank account transactions and cannot be paid by credit card. "
+            f"Top excluded categories: {category_list}."
+        )
+
+    spending_df = eligible_df
+
+    render_current_card_performance(spending_df)
+    st.divider()
+
+    tab_single, tab_two, tab_three = st.tabs(["Best Single Card", "Best 2-Card Combo", "Best 3-Card Combo"])
+
+    with tab_single:
+        recs = build_card_recommendations(spending_df)
+        st.dataframe(
+            recs,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
+                "Annual Fee": st.column_config.NumberColumn("Annual Fee", format="$%.0f"),
+                "Est. Net Value": st.column_config.NumberColumn("Est. Net Value", format="$%.2f"),
+            },
+        )
+        top_card_names = recs.head(5)["Card"].tolist()
+        selected_card_name = st.selectbox(
+            "Show earnings breakdown for:",
+            top_card_names,
+            key="single_card_breakdown_select",
+        )
+        selected_card_def = next((c for c in CREDIT_CARD_CATALOG if c["name"] == selected_card_name), None)
+        if selected_card_def:
+            st.caption(selected_card_def["notes"])
+            breakdown = build_card_category_breakdown(spending_df, selected_card_def)
+            if not breakdown.empty:
+                st.markdown(f"**Earnings breakdown: {selected_card_name}**")
+                st.dataframe(
+                    breakdown,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        "Est. Annual Spend": st.column_config.NumberColumn("Est. Annual Spend", format="$%.2f"),
+                        "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
+                    },
+                )
+
+    with tab_two:
+        st.caption("Each spending category is assigned to whichever card in the pair earns the highest rate for it.")
+        render_combo_section(spending_df, card_count=2)
+
+    with tab_three:
+        st.caption("Each spending category is assigned to whichever card in the trio earns the highest rate for it.")
+        render_combo_section(spending_df, card_count=3)
+
+
 def main() -> None:
     render_global_styles()
     st.title("Credit Card Spending Assistant")
 
-    category_rules = load_category_rules(str(CATEGORY_RULES_PATH))
+    category_rules = load_category_rules(
+        str(CATEGORY_RULES_PATH),
+        file_cache_signature(CATEGORY_RULES_PATH),
+    )
 
     with st.sidebar:
         st.header("Data")
@@ -1520,80 +2388,93 @@ def main() -> None:
             key="cleaned_csv_download",
         )
 
-    render_metric_row(spending_df)
-    render_monthly_category_chart(spending_df)
-    st.subheader("Spending by Category")
-    category_chart_spending_df = render_spending_date_filter(
-        spending_df,
-        label="Filter category spend date range",
-        key="category_spend_date_range",
-    )
-    render_category_total_chart(category_chart_spending_df)
+    tab_summary, tab_recs = st.tabs(["Summary", "Credit Card Recommendations"])
 
-    left, right = st.columns([0.9, 1.1], gap="large")
+    with tab_summary:
+        render_metric_row(spending_df)
+        render_monthly_category_chart(spending_df)
+        st.subheader("Spending by Category")
+        category_chart_spending_df = render_spending_date_filter(
+            spending_df,
+            label="Filter category spend date range",
+            key="category_spend_date_range",
+        )
+        render_category_total_chart(category_chart_spending_df)
 
-    with left:
-        st.subheader("Spending Category Analyzer")
-        filtered_spending_df = render_spending_date_filter(spending_df)
-        selected_summary_category = render_spending_category_filter(filtered_spending_df)
+        left, right = st.columns([0.9, 1.1], gap="large")
 
-    data_signature = f"{data_name}:{len(df)}:{filtered_spending_df['Spend'].sum() if not filtered_spending_df.empty else 0}:{date_range_text(filtered_spending_df)}"
+        with left:
+            st.subheader("Spending Category Analyzer")
+            filtered_spending_df = render_spending_date_filter(spending_df)
+            selected_summary_category = render_spending_category_filter(filtered_spending_df)
 
-    if st.session_state.get("data_signature") != data_signature:
-        st.session_state.data_signature = data_signature
-        st.session_state.messages = [
-            {
-                "role": "assistant",
-                "content": "Ask a spending question. I will answer using the cleaned transaction data loaded in this app.",
-            }
-        ]
-    elif "messages" not in st.session_state:
-        st.session_state.messages = [
-            {
-                "role": "assistant",
-                "content": "Ask a spending question. I will answer using the cleaned transaction data loaded in this app.",
-            }
-        ]
+        data_signature = f"{data_name}:{len(df)}:{filtered_spending_df['Spend'].sum() if not filtered_spending_df.empty else 0}:{date_range_text(filtered_spending_df)}"
 
-    with left:
-        render_selected_category_summary(filtered_spending_df, selected_summary_category)
+        if st.session_state.get("data_signature") != data_signature:
+            st.session_state.data_signature = data_signature
+            st.session_state.messages = [
+                {
+                    "role": "assistant",
+                    "content": "Ask a spending question. I will answer using the cleaned transaction data loaded in this app.",
+                }
+            ]
+        elif "messages" not in st.session_state:
+            st.session_state.messages = [
+                {
+                    "role": "assistant",
+                    "content": "Ask a spending question. I will answer using the cleaned transaction data loaded in this app.",
+                }
+            ]
 
-    with right:
-        st.subheader("Chat")
-        with st.container(height=420, border=True, autoscroll=True):
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.write(message["content"])
+        with left:
+            render_selected_category_summary(filtered_spending_df, selected_summary_category)
 
-        question = st.chat_input("Ask a spending question")
-        if question:
-            previous_messages = list(st.session_state.messages)
-            st.session_state.messages.append({"role": "user", "content": question})
-            with st.spinner("Asking OpenAI..."):
-                answer = ask_openai_spending_question(question, df, filtered_spending_df, previous_messages)
-            st.session_state.messages.append({"role": "assistant", "content": answer})
-            st.rerun()
+        with right:
+            st.subheader("Chat")
+            with st.container(height=420, border=True, autoscroll=True):
+                for message in st.session_state.messages:
+                    with st.chat_message(message["role"]):
+                        st.write(message["content"])
 
-    if show_rows:
-        st.subheader("Cleaned Transaction Table")
-        cleaned_columns = [
-            "Date",
-            SOURCE_FILE_COLUMN,
-            "Description",
-            "Statement Detail",
-            "Reference Number",
-            "Category",
-            "Category Source",
-            "Original Category",
-            "Spend",
-        ]
-        cleaned_columns = [column for column in cleaned_columns if column in filtered_spending_df.columns]
-        cleaned_display = filtered_spending_df[cleaned_columns].copy()
-        cleaned_display["Date"] = cleaned_display["Date"].dt.date
-        cleaned_display["Spend"] = cleaned_display["Spend"].map(money)
-        st.dataframe(cleaned_display, hide_index=True, use_container_width=True)
+            question = st.chat_input("Ask a spending question")
+            if question:
+                previous_messages = list(st.session_state.messages)
+                st.session_state.messages.append({"role": "user", "content": question})
+                with st.spinner("Asking OpenAI..."):
+                    answer = ask_openai_spending_question(question, df, filtered_spending_df, previous_messages)
+                st.session_state.messages.append({"role": "assistant", "content": answer})
+                st.rerun()
 
-    st.caption(f"Dataset: {data_name}")
+        if show_rows:
+            st.subheader("Cleaned Transaction Table")
+            cleaned_columns = [
+                "Date",
+                SOURCE_FILE_COLUMN,
+                "Account",
+                "Description",
+                "Statement Detail",
+                "Reference Number",
+                "Category",
+                "Category Source",
+                "Spend",
+            ]
+            cleaned_columns = [column for column in cleaned_columns if column in filtered_spending_df.columns]
+            cleaned_display = filtered_spending_df[cleaned_columns].copy()
+            cleaned_display["Date"] = cleaned_display["Date"].dt.date
+            cleaned_display["Spend"] = cleaned_display["Spend"].map(money)
+            st.dataframe(
+                cleaned_display,
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Category": st.column_config.TextColumn("Cleaned Category"),
+                },
+            )
+
+        st.caption(f"Dataset: {data_name}")
+
+    with tab_recs:
+        render_card_recommendations(spending_df)
 
 
 if __name__ == "__main__":

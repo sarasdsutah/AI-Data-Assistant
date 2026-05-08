@@ -7,11 +7,24 @@ Use these rules when analyzing the sample transaction dataset.
 - Analyze spending transactions only.
 - Exclude credit card payment or payback transactions from spending summaries, category totals, trends, and insights.
 - Do not treat credit card payments as income, refunds, savings, or spending.
+- Exclude investment transfers and internal account transfers from spending summaries, category
+  totals, trends, and insights.
+- Exclude tax payments from spending summaries, category totals, trends, and insights.
 
 ## Current Dataset Rule
 
 Rows should be excluded from spending analysis when the cleaned category, original provider
 category, or payment-like transaction description identifies the row as a credit card payment.
+Rows should also be excluded when the cleaned category is `Investments`, `Internal Transfers`, or
+`Taxes`.
+
+## User-Approved Exclusion Rules
+
+- Treat Betterment transactions as `Investments`, and exclude them from spending analysis.
+- Treat My529 transactions as `Investments`, and exclude them from spending analysis.
+- Treat Bank of America, Venmo, and Discover Bank transactions as `Internal Transfers`, and exclude
+  them from spending analysis.
+- Treat tax transactions as `Taxes`, and exclude them from spending analysis.
 
 ## Amount Handling
 

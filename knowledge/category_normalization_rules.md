@@ -16,6 +16,7 @@ account identifiers, or row-level spending details here.
 | `Interview Query Interviewquerca` | `Career Growth` | Career growth-related spending. |
 | `Airgarage` | `Parking` | Parking spending. |
 | `Ccri By Upma Salt Lake Citut` | `Parking` | Parking spending. |
+| `House Of Vapes` | `Other` | User-approved other spending. |
 
 ## Usage Notes
 
