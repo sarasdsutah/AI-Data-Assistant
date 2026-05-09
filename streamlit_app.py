@@ -30,6 +30,9 @@ SUPPORTED_UPLOAD_TYPES = ["csv", "pdf"]
 DEFAULT_CATEGORY = "Other"
 DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
 CHAT_TRANSACTION_CONTEXT_CHAR_LIMIT = 120_000
+CARD_RECOMMENDATION_CONTEXT_CHAR_LIMIT = 120_000
+COMBO_CARD_COUNTS = [2, 3, 4, 5, 6]
+PERCENT_BALANCE_PAYMENT_FLOOR = 20.0
 AMAZON_REFERENCE_PATTERN = r"[A-Z]\d{6}[A-Z0-9]{10}"
 AMAZON_REFERENCED_TRANSACTION_PATTERN = re.compile(
     rf"(?P<date>\d{{2}}/\d{{2}})"
@@ -121,7 +124,7 @@ CREDIT_CARD_CATALOG: list[dict] = [
         "notes": "3% dining, 1.5% on everything else. No annual fee.",
     },
     {
-        "name": "Capital One SavorOne",
+        "name": "Capital One Savor Cash Rewards",
         "issuer": "Capital One",
         "annual_fee": 0,
         "category_rates": {
@@ -134,7 +137,27 @@ CREDIT_CARD_CATALOG: list[dict] = [
         },
         "category_caps": {},
         "default_rate": 0.01,
-        "notes": "3% dining, entertainment, streaming, and grocery stores. 1% elsewhere. No annual fee.",
+        "notes": "3% dining, entertainment, popular streaming, and grocery stores; 5% hotels/vacation rentals/rental cars booked through Capital One Travel; 1% elsewhere. No annual fee. Portal-only travel bonus is not broadly modeled.",
+    },
+    {
+        "name": "Capital One Venture Rewards",
+        "issuer": "Capital One",
+        "annual_fee": 95,
+        "category_rates": {},
+        "category_caps": {},
+        "default_rate": 0.02,
+        "notes": "2x miles on every purchase, modeled at 1 cent per mile. 5x on hotels, vacation rentals, and rental cars booked through Capital One Travel is not broadly modeled. $95 annual fee.",
+    },
+    {
+        "name": "Capital One Venture X Rewards",
+        "issuer": "Capital One",
+        "annual_fee": 395,
+        "statement_credits": 300,
+        "statement_credits_detail": "$300 Capital One Travel credit; 10,000 anniversary miles noted but not included as a statement credit",
+        "category_rates": {},
+        "category_caps": {},
+        "default_rate": 0.02,
+        "notes": "2x miles on every purchase, modeled at 1 cent per mile. 10x hotels/rental cars and 5x flights/vacation rentals through Capital One Travel are not broadly modeled. $395 annual fee, includes $300 portal travel credit and 10,000 anniversary miles.",
     },
     {
         "name": "Discover It Cash Back",
@@ -278,6 +301,8 @@ CREDIT_CARD_CATALOG: list[dict] = [
         "name": "Amex Gold",
         "issuer": "American Express",
         "annual_fee": 250,
+        "statement_credits": 240,
+        "statement_credits_detail": "$120 dining credit + $120 Uber Cash",
         "category_rates": {
             "Restaurants": 0.04,
             "Coffee & Drinks": 0.04,
@@ -294,17 +319,113 @@ CREDIT_CARD_CATALOG: list[dict] = [
     {
         "name": "Chase Sapphire Reserve",
         "issuer": "Chase",
-        "annual_fee": 550,
+        "annual_fee": 795,
+        "statement_credits": 300,
+        "statement_credits_detail": "$300 travel credit; other limited travel, dining, lifestyle, and entertainment credits not modeled",
         "category_rates": {
             "Restaurants": 0.045,
             "Coffee & Drinks": 0.045,
             "Food Delivery": 0.045,
-            "Travel": 0.045,
-            "Parking": 0.045,
+            "Travel": 0.06,
+            "Parking": 0.015,
         },
         "category_caps": {},
         "default_rate": 0.015,
-        "notes": "3x dining & travel. Points at 1.5¢ via Chase portal. $550 annual fee (includes $300 travel credit).",
+        "notes": "3x dining and 4x direct flights/hotels modeled at 1.5¢ per point; 8x Chase Travel portal purchases and other limited credits are not broadly modeled. $795 annual fee.",
+    },
+    {
+        "name": "Amex Platinum",
+        "issuer": "American Express",
+        "annual_fee": 895,
+        "category_rates": {
+            "Travel": 0.05,
+        },
+        "category_caps": {},
+        "default_rate": 0.01,
+        "notes": "5x eligible flights and prepaid hotels through American Express travel channels, represented with the app's coarse Travel category; 1x elsewhere. $895 annual fee. Statement credits and lounge benefits are not modeled.",
+    },
+]
+
+APR_CARD_CATALOG: list[dict] = [
+    {
+        "name": "BankAmericard credit card",
+        "issuer": "Bank of America",
+        "annual_fee": 0,
+        "purchase_intro_apr": "0% for 21 billing cycles",
+        "balance_transfer_intro_apr": "0% for 21 billing cycles on transfers made in the first 60 days",
+        "regular_apr": "14.99%-25.99% Variable APR",
+        "regular_apr_min": 0.1499,
+        "purchase_intro_months": 21,
+        "balance_transfer_intro_months": 21,
+        "balance_transfer_fee": "5%",
+        "balance_transfer_fee_rate": 0.05,
+        "balance_transfer_fee_min": 0.0,
+        "rewards": "None",
+        "best_for": "Lowest listed regular APR range in this low-APR set.",
+    },
+    {
+        "name": "U.S. Bank Shield Visa",
+        "issuer": "U.S. Bank",
+        "annual_fee": 0,
+        "purchase_intro_apr": "0% for 21 billing cycles",
+        "balance_transfer_intro_apr": "0% for 21 billing cycles",
+        "regular_apr": "16.99%-27.99% Variable APR",
+        "regular_apr_min": 0.1699,
+        "purchase_intro_months": 21,
+        "balance_transfer_intro_months": 21,
+        "balance_transfer_fee": "5%, minimum $5",
+        "balance_transfer_fee_rate": 0.05,
+        "balance_transfer_fee_min": 5.0,
+        "rewards": "4% on eligible prepaid travel booked in the Travel Center",
+        "best_for": "Long 0% APR window with limited travel-center rewards.",
+    },
+    {
+        "name": "Citi Simplicity Card",
+        "issuer": "Citi",
+        "annual_fee": 0,
+        "purchase_intro_apr": "0% for 18 months",
+        "balance_transfer_intro_apr": "0% for 18 months",
+        "regular_apr": "17.49%-28.24% Variable APR",
+        "regular_apr_min": 0.1749,
+        "purchase_intro_months": 18,
+        "balance_transfer_intro_months": 18,
+        "balance_transfer_fee": "3% intro fee, then 5%",
+        "balance_transfer_fee_rate": 0.03,
+        "balance_transfer_fee_min": 5.0,
+        "rewards": "None",
+        "best_for": "Long intro APR plus no late fees.",
+    },
+    {
+        "name": "Wells Fargo Reflect Card",
+        "issuer": "Wells Fargo",
+        "annual_fee": 0,
+        "purchase_intro_apr": "0% for 21 months",
+        "balance_transfer_intro_apr": "0% for 21 months on qualifying transfers",
+        "regular_apr": "17.49%, 23.99%, or 28.24% Variable APR",
+        "regular_apr_min": 0.1749,
+        "purchase_intro_months": 21,
+        "balance_transfer_intro_months": 21,
+        "balance_transfer_fee": "5%, minimum $5",
+        "balance_transfer_fee_rate": 0.05,
+        "balance_transfer_fee_min": 5.0,
+        "rewards": "None",
+        "best_for": "Long purchase and balance-transfer intro APR period.",
+    },
+    {
+        "name": "Citi Double Cash",
+        "issuer": "Citi",
+        "annual_fee": 0,
+        "purchase_intro_apr": "None",
+        "balance_transfer_intro_apr": "0% for 18 months",
+        "regular_apr": "17.49%-27.49% Variable APR",
+        "regular_apr_min": 0.1749,
+        "purchase_intro_months": 0,
+        "balance_transfer_intro_months": 18,
+        "balance_transfer_fee": "3% intro fee, then 5%",
+        "balance_transfer_fee_rate": 0.03,
+        "balance_transfer_fee_min": 5.0,
+        "rewards": "2% cash back when paid off",
+        "best_for": "Balance transfer plus long-term flat cash-back value after debt is paid.",
     },
 ]
 
@@ -1870,6 +1991,12 @@ def auto_match_account_to_card(account: str) -> str | None:
     account_lower = account.strip().lower()
     if account_lower in ACCOUNT_CARD_OVERRIDES:
         return ACCOUNT_CARD_OVERRIDES[account_lower]
+    if "savor" in account_lower:
+        return "Capital One Savor Cash Rewards"
+    if "venture x" in account_lower:
+        return "Capital One Venture X Rewards"
+    if "venture" in account_lower:
+        return "Capital One Venture Rewards"
     if "unlimited cash" in account_lower:
         return "BofA Unlimited Cash Rewards"
     if "customized cash" in account_lower or "custom cash" in account_lower:
@@ -1887,11 +2014,13 @@ def build_card_recommendations(spending_df: pd.DataFrame) -> pd.DataFrame:
     for card in CREDIT_CARD_CATALOG:
         annual_rewards = estimate_card_annual_rewards(spending_df, card)
         annual_fee = card["annual_fee"]
+        statement_credits = card.get("statement_credits", 0)
         rows.append({
             "Card": card["name"],
             "Issuer": card["issuer"],
             "Est. Annual Rewards": annual_rewards,
             "Annual Fee": annual_fee,
+            "Statement Credits": statement_credits if statement_credits else None,
             "Est. Net Value": annual_rewards - annual_fee,
         })
     return (
@@ -2028,23 +2157,56 @@ def estimate_combo_annual_rewards(spending_df: pd.DataFrame, cards: list[dict]) 
     return total
 
 
+def build_card_category_reward_lookup(spending_df: pd.DataFrame) -> tuple[list[str], dict[str, dict[str, float]]]:
+    categories = spending_df["Category"].dropna().astype(str).unique().tolist()
+    reward_lookup: dict[str, dict[str, float]] = {}
+
+    for card in CREDIT_CARD_CATALOG:
+        breakdown = build_card_category_breakdown(spending_df, card)
+        rewards: dict[str, float] = {category: 0.0 for category in categories}
+        if not breakdown.empty:
+            for row in breakdown.to_dict("records"):
+                rewards[str(row["Category"])] = float(row["Est. Annual Rewards"])
+        reward_lookup[card["name"]] = rewards
+
+    return categories, reward_lookup
+
+
+def estimate_combo_annual_rewards_from_lookup(
+    categories: list[str],
+    reward_lookup: dict[str, dict[str, float]],
+    cards: list[dict],
+) -> float:
+    card_names = [card["name"] for card in cards]
+    total = 0.0
+    for category in categories:
+        total += max(
+            (reward_lookup.get(card_name, {}).get(category, 0.0) for card_name in card_names),
+            default=0.0,
+        )
+    return total
+
+
 def build_combo_recommendations(spending_df: pd.DataFrame, card_count: int, top_n: int = 5) -> tuple[pd.DataFrame, list[list[dict]]]:
-    ranked: list[tuple[float, float, float, list[dict]]] = []
+    ranked: list[tuple[float, float, float, float, list[dict]]] = []
+    categories, reward_lookup = build_card_category_reward_lookup(spending_df)
     for combo in combinations(CREDIT_CARD_CATALOG, card_count):
         combo_list = list(combo)
-        annual_rewards = estimate_combo_annual_rewards(spending_df, combo_list)
+        annual_rewards = estimate_combo_annual_rewards_from_lookup(categories, reward_lookup, combo_list)
         total_fee = sum(card["annual_fee"] for card in combo_list)
+        statement_credits = sum(card.get("statement_credits", 0) for card in combo_list)
         net_value = annual_rewards - total_fee
-        ranked.append((net_value, annual_rewards, total_fee, combo_list))
+        ranked.append((net_value, annual_rewards, total_fee, statement_credits, combo_list))
     ranked.sort(key=lambda x: x[0], reverse=True)
 
     rows = []
     card_combos: list[list[dict]] = []
-    for net_value, annual_rewards, total_fee, combo_list in ranked[:top_n]:
+    for net_value, annual_rewards, total_fee, statement_credits, combo_list in ranked[:top_n]:
         rows.append({
             "Cards": " + ".join(c["name"] for c in combo_list),
             "Est. Annual Rewards": annual_rewards,
             "Total Annual Fees": total_fee,
+            "Statement Credits": statement_credits if statement_credits else None,
             "Est. Net Value": net_value,
         })
         card_combos.append(combo_list)
@@ -2147,70 +2309,91 @@ def build_combo_category_breakdown(spending_df: pd.DataFrame, cards: list[dict])
     )
 
 
-def render_combo_section(spending_df: pd.DataFrame, card_count: int) -> None:
-    combos_df, card_combos = build_combo_recommendations(spending_df, card_count)
-    if combos_df.empty:
-        return
-    st.dataframe(
-        combos_df,
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
-            "Total Annual Fees": st.column_config.NumberColumn("Total Annual Fees", format="$%.0f"),
-            "Est. Net Value": st.column_config.NumberColumn("Est. Net Value", format="$%.2f"),
-        },
+def format_reward_rate(rate: float) -> str:
+    return f"{rate * 100:.2g}%"
+
+
+def format_card_mapping(mapping: dict) -> str:
+    if not mapping:
+        return ""
+    return "; ".join(
+        f"{category}: {value}" for category, value in mapping.items()
     )
-    combo_labels = combos_df["Cards"].tolist()
-    selected_label = st.selectbox(
-        "Show category breakdown for:",
-        combo_labels,
-        key=f"combo_{card_count}_breakdown_select",
-    )
-    selected_idx = combo_labels.index(selected_label)
-    selected_combo = card_combos[selected_idx]
-    breakdown = build_combo_category_breakdown(spending_df, selected_combo)
-    if not breakdown.empty:
-        st.markdown(f"**Category assignments: {selected_label}**")
-        st.dataframe(
-            breakdown,
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "Est. Annual Spend": st.column_config.NumberColumn("Est. Annual Spend", format="$%.2f"),
-                "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
-            },
+
+
+def card_catalog_context_csv() -> str:
+    rows = []
+    for card in CREDIT_CARD_CATALOG:
+        quarterly_categories = card.get("quarterly_categories", {})
+        quarterly_text = "; ".join(
+            f"Q{quarter}: {', '.join(categories)}"
+            for quarter, categories in quarterly_categories.items()
+        )
+        rows.append({
+            "Card": card["name"],
+            "Issuer": card["issuer"],
+            "Annual Fee": card["annual_fee"],
+            "Statement Credits": card.get("statement_credits", 0),
+            "Statement Credits Detail": card.get("statement_credits_detail", ""),
+            "Default Rate": format_reward_rate(card.get("default_rate", 0.0)),
+            "Category Rates": format_card_mapping({
+                category: format_reward_rate(rate)
+                for category, rate in card.get("category_rates", {}).items()
+            }),
+            "Category Caps": format_card_mapping({
+                category: f"${cap:,.0f}/yr"
+                for category, cap in card.get("category_caps", {}).items()
+            }),
+            "Quarterly Bonus Rate": format_reward_rate(card.get("quarterly_bonus_rate", 0.0))
+            if "quarterly_bonus_rate" in card else "",
+            "Quarterly Cap": f"${card['quarterly_cap']:,.0f}/quarter" if "quarterly_cap" in card else "",
+            "Quarterly Categories": quarterly_text,
+            "Current Account All Spending Rate": format_reward_rate(card["all_spending_rate"])
+            if "all_spending_rate" in card else "",
+            "Notes": card.get("notes", ""),
+        })
+    return pd.DataFrame(rows).to_csv(index=False)
+
+
+def annualized_category_summary(spending_df: pd.DataFrame) -> pd.DataFrame:
+    summary = category_summary(spending_df)
+    if summary.empty:
+        return pd.DataFrame(columns=["Category", "Transactions", "Spend", "Est. Annual Spend"])
+    factor = annualization_factor(spending_df)
+    summary["Est. Annual Spend"] = summary["Spend"] * factor
+    return summary
+
+
+def build_current_card_accounts_context_df(
+    eligible_df: pd.DataFrame,
+    account_card_map: dict[str, str],
+) -> pd.DataFrame:
+    rows = []
+    factor = annualization_factor(eligible_df)
+    for account in detect_credit_card_accounts(eligible_df):
+        account_df = eligible_df[eligible_df["Account"].fillna("").astype(str) == account]
+        observed_spend = float(account_df["Spend"].sum()) if not account_df.empty else 0.0
+        rows.append({
+            "Account": account,
+            "Auto Matched Card": auto_match_account_to_card(account) or "",
+            "Selected Card": account_card_map.get(account, ""),
+            "Observed Spend": observed_spend,
+            "Est. Annual Spend": observed_spend * factor,
+            "Transactions": len(account_df),
+        })
+    return pd.DataFrame(rows)
+
+
+def build_current_card_performance_df(
+    eligible_df: pd.DataFrame,
+    account_card_map: dict[str, str],
+) -> pd.DataFrame:
+    if eligible_df.empty or not account_card_map:
+        return pd.DataFrame(
+            columns=["Account", "Card", "Est. Annual Rewards", "Annual Fee", "Statement Credits", "Est. Net Value"]
         )
 
-
-def render_current_card_performance(eligible_df: pd.DataFrame) -> None:
-    st.subheader("Your Current Cards")
-
-    cc_accounts = detect_credit_card_accounts(eligible_df)
-    if not cc_accounts:
-        st.info("No credit card accounts detected in the loaded data.")
-        return
-
-    card_options = ["— select card —"] + [c["name"] for c in CREDIT_CARD_CATALOG]
     global_factor = annualization_factor(eligible_df)
-
-    account_card_map: dict[str, str] = {}
-    for account in cc_accounts:
-        auto = auto_match_account_to_card(account)
-        default_idx = card_options.index(auto) if auto and auto in card_options else 0
-        selected = st.selectbox(
-            f"Account: **{account}**",
-            card_options,
-            index=default_idx,
-            key=f"current_card_{account}",
-        )
-        if selected != "— select card —":
-            account_card_map[account] = selected
-
-    if not account_card_map:
-        st.caption("Select a card for each account above to see current reward estimates.")
-        return
-
     rows = []
     for account, card_name in account_card_map.items():
         card = next((c for c in CREDIT_CARD_CATALOG if c["name"] == card_name), None)
@@ -2226,31 +2409,958 @@ def render_current_card_performance(eligible_df: pd.DataFrame) -> None:
             "Card": card_name,
             "Est. Annual Rewards": annual_rewards,
             "Annual Fee": float(card["annual_fee"]),
+            "Statement Credits": card.get("statement_credits") or None,
             "Est. Net Value": annual_rewards - card["annual_fee"],
         })
 
     if not rows:
-        return
+        return pd.DataFrame(
+            columns=["Account", "Card", "Est. Annual Rewards", "Annual Fee", "Statement Credits", "Est. Net Value"]
+        )
 
-    totals = {
+    rows.append({
         "Account": "Total",
         "Card": "",
         "Est. Annual Rewards": sum(r["Est. Annual Rewards"] for r in rows),
         "Annual Fee": sum(r["Annual Fee"] for r in rows),
+        "Statement Credits": sum(float(r["Statement Credits"] or 0) for r in rows) or None,
         "Est. Net Value": sum(r["Est. Net Value"] for r in rows),
-    }
-    rows.append(totals)
+    })
+    return pd.DataFrame(rows)
+
+
+def current_total_net_value(current_performance: pd.DataFrame) -> float | None:
+    if current_performance.empty or "Est. Net Value" not in current_performance.columns:
+        return None
+
+    if "Account" in current_performance.columns:
+        total_rows = current_performance[current_performance["Account"].astype(str) == "Total"]
+        if not total_rows.empty:
+            return float(total_rows.iloc[0]["Est. Net Value"])
+
+    return float(current_performance["Est. Net Value"].sum())
+
+
+def application_decision(delta: float | None) -> str:
+    if delta is None:
+        return "Select current cards to compare"
+    if delta >= 100:
+        return "Yes - meaningful estimated gain"
+    if delta > 0:
+        return "Maybe - small estimated gain"
+    if delta == 0:
+        return "No - no net-value improvement"
+    return "No - current setup is better"
+
+
+def combo_option_label(card_count: int) -> str:
+    return f"Best {card_count}-card combo"
+
+
+def combo_tab_label(card_count: int) -> str:
+    return f"Best {card_count}-Card Combo"
+
+
+def combo_assignment_caption(card_count: int) -> str:
+    combo_name = {2: "pair", 3: "trio"}.get(card_count, f"{card_count}-card combo")
+    return f"Each spending category is assigned to whichever card in the {combo_name} earns the highest rate for it."
+
+
+def build_application_value_summary(spending_df: pd.DataFrame, account_card_map: dict[str, str]) -> pd.DataFrame:
+    current_performance = build_current_card_performance_df(spending_df, account_card_map)
+    current_net = current_total_net_value(current_performance)
+    rows: list[dict[str, object]] = []
+
+    if current_net is not None:
+        rows.append({
+            "Option": "Current selected cards",
+            "Cards": "Current setup",
+            "Est. Net Value": current_net,
+            "Gain vs Current": 0.0,
+            "Decision": "Baseline",
+        })
+
+    single_recs = build_card_recommendations(spending_df)
+    if not single_recs.empty:
+        top_single = single_recs.iloc[0]
+        single_net = float(top_single["Est. Net Value"])
+        delta = single_net - current_net if current_net is not None else None
+        rows.append({
+            "Option": "Best single card",
+            "Cards": top_single["Card"],
+            "Est. Net Value": single_net,
+            "Gain vs Current": delta,
+            "Decision": application_decision(delta),
+        })
+
+    for card_count in COMBO_CARD_COUNTS:
+        combo_recs, _card_combos = build_combo_recommendations(spending_df, card_count, top_n=1)
+        if combo_recs.empty:
+            continue
+        top_combo = combo_recs.iloc[0]
+        combo_net = float(top_combo["Est. Net Value"])
+        delta = combo_net - current_net if current_net is not None else None
+        rows.append({
+            "Option": combo_option_label(card_count),
+            "Cards": top_combo["Cards"],
+            "Est. Net Value": combo_net,
+            "Gain vs Current": delta,
+            "Decision": application_decision(delta),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def render_application_value_summary(spending_df: pd.DataFrame, account_card_map: dict[str, str]) -> None:
+    summary = build_application_value_summary(spending_df, account_card_map)
+    if summary.empty:
+        return
+
+    st.subheader("Should You Apply?")
+    current_rows = summary[summary["Option"] == "Current selected cards"]
+    comparison_rows = summary[summary["Option"] != "Current selected cards"].copy()
+
+    if current_rows.empty:
+        st.caption(
+            "Select your current cards above to compare the top recommendations against your current total net value."
+        )
+    elif not comparison_rows.empty:
+        best_option = comparison_rows.sort_values("Est. Net Value", ascending=False).iloc[0]
+        best_delta = float(best_option["Gain vs Current"])
+        if best_delta > 0:
+            st.success(
+                f"{best_option['Option']} has the highest estimated net value: "
+                f"{money(float(best_option['Est. Net Value']))}, about {money(best_delta)} more per year "
+                "than your selected current cards."
+            )
+        else:
+            st.info(
+                "Based on estimated annual net value, your selected current cards are already competitive. "
+                f"The best new option is {money(abs(best_delta))} lower per year."
+            )
 
     st.dataframe(
-        pd.DataFrame(rows),
+        summary,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Est. Net Value": st.column_config.NumberColumn("Est. Net Value", format="$%.2f"),
+            "Gain vs Current": st.column_config.NumberColumn("Gain vs Current", format="$%.2f"),
+        },
+    )
+    st.caption(
+        "This compares modeled annual rewards minus annual fees. Statement credits, signup bonuses, "
+        "approval odds, and credit-score impact are not included in the net-value decision."
+    )
+
+
+def payoff_time_text(payoff: dict[str, float | int | bool]) -> str:
+    return f"{float(payoff['years']):.1f} years" if payoff["paid_off"] else "50+ years"
+
+
+def balance_transfer_fee(balance: float, card: dict) -> float:
+    if balance <= 0:
+        return 0.0
+    fee_rate = float(card.get("balance_transfer_fee_rate", 0.0) or 0.0)
+    fee_min = float(card.get("balance_transfer_fee_min", 0.0) or 0.0)
+    if fee_rate <= 0:
+        return 0.0
+    return max(balance * fee_rate, fee_min)
+
+
+def balance_transfer_intro_months(card: dict) -> int:
+    return int(card.get("balance_transfer_intro_months", 0) or 0)
+
+
+def simulate_payment_payoff_with_intro(
+    balance: float,
+    regular_apr: float,
+    intro_months: int,
+    payment_method: str,
+    minimum_percent: float | None = None,
+    monthly_payment_amount: float | None = None,
+    upfront_fee: float = 0.0,
+    percent_payment_floor: float = PERCENT_BALANCE_PAYMENT_FLOOR,
+    max_months: int = 600,
+) -> dict[str, float | int | bool]:
+    current_balance = max(balance, 0.0) + max(upfront_fee, 0.0)
+    regular_monthly_rate = max(regular_apr, 0.0) / 12.0
+    total_interest = 0.0
+    total_paid = 0.0
+    months = 0
+
+    if current_balance > 0 and payment_method == "Fixed dollar amount" and float(monthly_payment_amount or 0.0) <= 0:
+        return {
+            "months": max_months,
+            "years": max_months / 12.0,
+            "total_interest": 0.0,
+            "total_paid": 0.0,
+            "remaining_balance": current_balance,
+            "paid_off": False,
+            "starting_balance": current_balance,
+            "upfront_fee": max(upfront_fee, 0.0),
+        }
+
+    while current_balance > 0.01 and months < max_months:
+        beginning_balance = current_balance
+        monthly_rate = 0.0 if months < intro_months else regular_monthly_rate
+        interest = beginning_balance * monthly_rate
+        amount_due = beginning_balance + interest
+
+        if payment_method == "Percent of balance":
+            percent_payment = beginning_balance * (float(minimum_percent or 0.0) / 100.0)
+            payment = max(percent_payment, max(percent_payment_floor, 0.0))
+        else:
+            payment = float(monthly_payment_amount or 0.0)
+
+        if payment <= interest and amount_due > payment and monthly_rate > 0:
+            total_interest += interest
+            months += 1
+            return {
+                "months": max_months,
+                "years": max_months / 12.0,
+                "total_interest": total_interest,
+                "total_paid": total_paid,
+                "remaining_balance": amount_due,
+                "paid_off": False,
+                "starting_balance": max(balance, 0.0) + max(upfront_fee, 0.0),
+                "upfront_fee": max(upfront_fee, 0.0),
+            }
+
+        payment = min(max(payment, 0.0), amount_due)
+        current_balance = amount_due - payment
+        total_interest += interest
+        total_paid += payment
+        months += 1
+
+    return {
+        "months": months,
+        "years": months / 12.0,
+        "total_interest": total_interest,
+        "total_paid": total_paid,
+        "remaining_balance": current_balance,
+        "paid_off": current_balance <= 0.01,
+        "starting_balance": max(balance, 0.0) + max(upfront_fee, 0.0),
+        "upfront_fee": max(upfront_fee, 0.0),
+    }
+
+
+def payment_detail_text(
+    payment_method: str,
+    minimum_percent: float | None = None,
+    monthly_payment_amount: float | None = None,
+) -> str:
+    if payment_method == "Percent of balance":
+        percent = float(minimum_percent or 0.0)
+        return f"{percent:.1f}% of balance, {money(PERCENT_BALANCE_PAYMENT_FLOOR)} min"
+    return f"{money(float(monthly_payment_amount or 0.0))} monthly"
+
+
+def current_apr_baseline_df(
+    balance: float,
+    current_apr_percent: float,
+    payment_method: str,
+    minimum_percent: float | None = None,
+    monthly_payment_amount: float | None = None,
+) -> pd.DataFrame:
+    current_apr = max(float(current_apr_percent), 0.0) / 100.0
+    payoff = simulate_payment_payoff_with_intro(
+        balance,
+        current_apr,
+        intro_months=0,
+        payment_method=payment_method,
+        minimum_percent=minimum_percent,
+        monthly_payment_amount=monthly_payment_amount,
+    )
+    paid_off = bool(payoff["paid_off"])
+    return pd.DataFrame([{
+        "Current Balance": money(balance),
+        "Current APR": f"{current_apr_percent:.2f}%",
+        "Monthly Interest Rate": f"{current_apr / 12.0:.3%}",
+        "Payment Detail": payment_detail_text(payment_method, minimum_percent, monthly_payment_amount),
+        "Estimated Interest": money(float(payoff["total_interest"])) if paid_off else "Not paid off",
+        "Total Amount of Payments": money(float(payoff["total_paid"])) if paid_off else "Not paid off",
+        "Estimated Payoff Time": payoff_time_text(payoff),
+    }])
+
+
+def apr_cards_df(
+    balance: float | None = None,
+    payment_method: str | None = None,
+    minimum_percent: float | None = None,
+    monthly_payment_amount: float | None = None,
+    current_apr_percent: float | None = None,
+) -> pd.DataFrame:
+    rows = []
+    has_payoff_inputs = balance is not None and payment_method is not None
+
+    def payoff_fields(regular_apr: float, intro_months: int, transfer_fee: float) -> dict:
+        if payment_method == "Percent of balance":
+            percent = float(minimum_percent or 0.0)
+            payoff = simulate_payment_payoff_with_intro(
+                balance or 0.0,
+                regular_apr,
+                intro_months,
+                payment_method or "",
+                minimum_percent=percent,
+                upfront_fee=transfer_fee,
+            )
+            monthly_payment_display = payment_detail_text(payment_method or "", percent)
+        else:
+            payment_amount = float(monthly_payment_amount or 0.0)
+            payoff = simulate_payment_payoff_with_intro(
+                balance or 0.0,
+                regular_apr,
+                intro_months,
+                payment_method or "",
+                monthly_payment_amount=payment_amount,
+                upfront_fee=transfer_fee,
+            )
+            monthly_payment_display = payment_detail_text(payment_method or "", monthly_payment_amount=payment_amount)
+
+        starting_balance = float(payoff["starting_balance"])
+        intro_payoff_payment = starting_balance / intro_months if intro_months > 0 else None
+        apr_months_used = max(int(payoff["months"]) - intro_months, 0)
+        estimated_interest = float(payoff["total_interest"]) if payoff["paid_off"] else None
+        total_cost = estimated_interest + transfer_fee if estimated_interest is not None else None
+        return {
+            "Monthly Payment": monthly_payment_display,
+            "Intro Months Used": intro_months,
+            "APR Months Used": apr_months_used,
+            "Monthly Payment to Avoid Interest": intro_payoff_payment,
+            "Regular APR After Intro": regular_apr,
+            "Estimated Transfer Fee": transfer_fee,
+            "Starting Balance After Fee": starting_balance,
+            "Estimated Interest": estimated_interest,
+            "Total Cost": total_cost,
+            "Estimated Payoff Time": payoff_time_text(payoff),
+        }
+
+    if has_payoff_inputs and current_apr_percent is not None:
+        current_apr = max(float(current_apr_percent), 0.0) / 100.0
+        current_row = {
+            "Card": "Your current credit card",
+            "Issuer": "Current",
+            "Annual Fee": None,
+            "Balance Transfer Intro APR": "No intro APR",
+            "Regular APR": f"{float(current_apr_percent):.2f}%",
+            "Balance Transfer Fee": "$0",
+            "Rewards": "Current card payoff comparison",
+        }
+        current_row.update(payoff_fields(current_apr, 0, 0.0))
+        rows.append(current_row)
+
+    for card in APR_CARD_CATALOG:
+        row = {
+            "Card": card["name"],
+            "Issuer": card["issuer"],
+            "Annual Fee": card["annual_fee"],
+            "Balance Transfer Intro APR": card["balance_transfer_intro_apr"],
+            "Regular APR": card["regular_apr"],
+            "Balance Transfer Fee": card["balance_transfer_fee"],
+            "Rewards": card["rewards"],
+        }
+        if has_payoff_inputs:
+            regular_apr = float(card["regular_apr_min"])
+            intro_months = balance_transfer_intro_months(card)
+            transfer_fee = balance_transfer_fee(balance, card)
+            row.update(payoff_fields(regular_apr, intro_months, transfer_fee))
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def render_best_apr_recommendations(
+    balance: float | None = None,
+    payment_method: str | None = None,
+    minimum_percent: float | None = None,
+    monthly_payment_amount: float | None = None,
+    current_apr_percent: float | None = None,
+) -> None:
+    st.subheader("Best APR Options")
+    st.caption(
+        "Use this view when you expect to carry a balance. Exact APR and approval terms depend on "
+        "creditworthiness and issuer underwriting; balance-transfer fee and intro APR terms should be "
+        "verified before applying."
+    )
+    apr_df = apr_cards_df(balance, payment_method, minimum_percent, monthly_payment_amount, current_apr_percent)
+    st.dataframe(
+        apr_df,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Annual Fee": st.column_config.NumberColumn("Annual Fee", format="$%.0f"),
+            "Regular APR After Intro": st.column_config.NumberColumn("Regular APR After Intro", format="%.2%"),
+            "Monthly Payment to Avoid Interest": st.column_config.NumberColumn("Monthly Payment to Avoid Interest", format="$%.2f"),
+            "Estimated Transfer Fee": st.column_config.NumberColumn("Estimated Transfer Fee", format="$%.2f"),
+            "Starting Balance After Fee": st.column_config.NumberColumn("Starting Balance After Fee", format="$%.2f"),
+            "Estimated Interest": st.column_config.NumberColumn("Estimated Interest", format="$%.2f"),
+            "Total Cost": st.column_config.NumberColumn("Total Cost", format="$%.2f"),
+        },
+    )
+
+
+def render_best_apr_summary(apr_df: pd.DataFrame, current_apr_percent: float, balance: float, payment_method: str) -> None:
+    if apr_df.empty or "Total Cost" not in apr_df.columns:
+        return
+
+    card_options = apr_df[apr_df["Card"] != "Your current credit card"].copy()
+    card_options = card_options[pd.notna(card_options["Total Cost"])]
+    if card_options.empty:
+        st.warning(
+            "Based on your current APR, balance, and payment style, none of the modeled card options fully "
+            "pay off within the model window. Try a higher monthly payment to compare lowest-cost cards."
+        )
+        return
+
+    lowest_cost = float(card_options["Total Cost"].min())
+    best_options = card_options[card_options["Total Cost"] == lowest_cost].sort_values("Card")
+    best_card_names = best_options["Card"].tolist()
+    if len(best_card_names) == 1:
+        card_text = best_card_names[0]
+    elif len(best_card_names) == 2:
+        card_text = " and ".join(best_card_names)
+    else:
+        card_text = ", ".join(best_card_names[:-1]) + f", and {best_card_names[-1]}"
+
+    payoff_time = best_options.iloc[0]["Estimated Payoff Time"]
+    baseline = apr_df[apr_df["Card"] == "Your current credit card"]
+    savings_text = ""
+    if not baseline.empty and pd.notna(baseline.iloc[0].get("Total Cost")):
+        baseline_cost = float(baseline.iloc[0]["Total Cost"])
+        savings = baseline_cost - lowest_cost
+        if savings > 0:
+            savings_text = f" That is about {money(savings)} less than staying with your current card."
+
+    st.markdown(
+        f"**Lowest cost summary:** Based on your current APR ({current_apr_percent:.2f}%), "
+        f"credit card balance ({money(balance)}), and payment style ({payment_method}), we believe "
+        f"{card_text} could offer the lowest modeled cost: {money(lowest_cost)} total cost with an estimated "
+        f"payoff time of {payoff_time}.{savings_text}"
+    )
+
+
+def simulate_minimum_payment_payoff(
+    balance: float,
+    apr: float,
+    minimum_percent: float,
+    minimum_floor: float,
+    max_months: int = 600,
+) -> dict[str, float | int | bool]:
+    current_balance = max(balance, 0.0)
+    monthly_rate = max(apr, 0.0) / 12.0
+    total_interest = 0.0
+    total_paid = 0.0
+    months = 0
+
+    while current_balance > 0.01 and months < max_months:
+        interest = current_balance * monthly_rate
+        current_balance += interest
+        minimum_payment = max(current_balance * minimum_percent, minimum_floor)
+        payment = min(minimum_payment, current_balance)
+        current_balance -= payment
+        total_interest += interest
+        total_paid += payment
+        months += 1
+
+    return {
+        "months": months,
+        "years": months / 12.0,
+        "total_interest": total_interest,
+        "total_paid": total_paid,
+        "remaining_balance": current_balance,
+        "paid_off": current_balance <= 0.01,
+    }
+
+
+def simulate_fixed_payment_payoff(
+    balance: float,
+    apr: float,
+    monthly_payment: float,
+    max_months: int = 600,
+) -> dict[str, float | int | bool]:
+    current_balance = max(balance, 0.0)
+    payment_amount = max(monthly_payment, 0.0)
+    monthly_rate = max(apr, 0.0) / 12.0
+    total_interest = 0.0
+    total_paid = 0.0
+    months = 0
+
+    if current_balance > 0 and payment_amount <= 0:
+        return {
+            "months": max_months,
+            "years": max_months / 12.0,
+            "total_interest": 0.0,
+            "total_paid": 0.0,
+            "remaining_balance": current_balance,
+            "paid_off": False,
+        }
+
+    while current_balance > 0.01 and months < max_months:
+        interest = current_balance * monthly_rate
+        current_balance += interest
+        if payment_amount <= interest and current_balance > payment_amount:
+            total_interest += interest
+            months += 1
+            return {
+                "months": max_months,
+                "years": max_months / 12.0,
+                "total_interest": total_interest,
+                "total_paid": total_paid,
+                "remaining_balance": current_balance,
+                "paid_off": False,
+            }
+        payment = min(payment_amount, current_balance)
+        current_balance -= payment
+        total_interest += interest
+        total_paid += payment
+        months += 1
+
+    return {
+        "months": months,
+        "years": months / 12.0,
+        "total_interest": total_interest,
+        "total_paid": total_paid,
+        "remaining_balance": current_balance,
+        "paid_off": current_balance <= 0.01,
+    }
+
+
+def render_minimum_payment_recommendations(spending_df: pd.DataFrame) -> None:
+    st.subheader("If You Usually Pay the Minimum or a Partial Payment")
+    st.warning(
+        "For minimum or partial-payment behavior, optimize for interest cost first. Rewards cards can be a bad fit "
+        "if you regularly carry a balance."
+    )
+
+    st.markdown("**Current card details**")
+    current_apr_percent = st.number_input(
+        "What's your current credit card APR (%)?",
+        min_value=0.0,
+        max_value=100.0,
+        value=24.99,
+        step=0.1,
+        format="%.2f",
+        key="current_credit_card_apr",
+    )
+
+    st.markdown("**Payment details**")
+    balance = st.number_input(
+        "Current credit card balance",
+        min_value=0.0,
+        value=5000.0,
+        step=100.0,
+        format="%.2f",
+        key="minimum_payment_balance",
+    )
+
+    method_col, amount_col, _ = st.columns([1.35, 1.05, 2.6], gap="small")
+    with method_col:
+        payment_method = st.radio(
+            "Payment style",
+            ["Percent of balance", "Fixed dollar amount"],
+            horizontal=True,
+            key="minimum_payment_method",
+        )
+    with amount_col:
+        if payment_method == "Percent of balance":
+            minimum_percent = st.number_input(
+                "Percent of balance to pay each month",
+                min_value=0.1,
+                max_value=100.0,
+                value=2.0,
+                step=0.1,
+                format="%.1f",
+                key="minimum_payment_percent",
+            )
+            monthly_payment_amount = 0.0
+        else:
+            minimum_percent = 0.0
+            monthly_payment_amount = st.number_input(
+                "Dollar amount to pay each month",
+                min_value=0.0,
+                value=250.0,
+                step=25.0,
+                format="%.2f",
+                key="minimum_payment_amount",
+            )
+
+    st.markdown("**Current card payoff baseline**")
+    st.dataframe(
+        current_apr_baseline_df(
+            balance=balance,
+            current_apr_percent=current_apr_percent,
+            payment_method=payment_method,
+            minimum_percent=minimum_percent,
+            monthly_payment_amount=monthly_payment_amount,
+        ),
+        hide_index=True,
+        use_container_width=True,
+    )
+    apr_df = apr_cards_df(
+        balance=balance,
+        payment_method=payment_method,
+        minimum_percent=minimum_percent,
+        monthly_payment_amount=monthly_payment_amount,
+        current_apr_percent=current_apr_percent,
+    )
+    render_best_apr_summary(
+        apr_df=apr_df,
+        current_apr_percent=current_apr_percent,
+        balance=balance,
+        payment_method=payment_method,
+    )
+
+    render_best_apr_recommendations(
+        balance=balance,
+        payment_method=payment_method,
+        minimum_percent=minimum_percent,
+        monthly_payment_amount=monthly_payment_amount,
+        current_apr_percent=current_apr_percent,
+    )
+
+
+def single_card_breakdowns_context(spending_df: pd.DataFrame, recs: pd.DataFrame, count: int = 5) -> str:
+    if recs.empty:
+        return "No single-card recommendation rows are available."
+
+    sections = []
+    for card_name in recs.head(count)["Card"].tolist():
+        card = next((c for c in CREDIT_CARD_CATALOG if c["name"] == card_name), None)
+        if card is None:
+            continue
+        breakdown = build_card_category_breakdown(spending_df, card)
+        if breakdown.empty:
+            continue
+        sections.append(f"{card_name} category rewards CSV:\n{breakdown.to_csv(index=False)}")
+    return "\n".join(sections) if sections else "No single-card category breakdowns are available."
+
+
+def combo_breakdowns_context(
+    spending_df: pd.DataFrame,
+    combos_df: pd.DataFrame,
+    card_combos: list[list[dict]],
+    count: int = 3,
+) -> str:
+    if combos_df.empty or not card_combos:
+        return "No combo recommendation rows are available."
+
+    sections = []
+    for index, combo in enumerate(card_combos[:count]):
+        label = str(combos_df.iloc[index]["Cards"]) if index < len(combos_df) else " + ".join(
+            card["name"] for card in combo
+        )
+        breakdown = build_combo_category_breakdown(spending_df, combo)
+        if breakdown.empty:
+            continue
+        sections.append(f"{label} category assignments CSV:\n{breakdown.to_csv(index=False)}")
+    return "\n".join(sections) if sections else "No combo category breakdowns are available."
+
+
+def build_card_recommendation_context(
+    all_spending_df: pd.DataFrame,
+    eligible_df: pd.DataFrame,
+    bank_only_df: pd.DataFrame,
+    account_card_map: dict[str, str],
+) -> str:
+    recommendation_knowledge = load_knowledge_text(
+        str(CARD_RECOMMENDATIONS_PATH),
+        file_cache_signature(CARD_RECOMMENDATIONS_PATH),
+    )
+    recs = build_card_recommendations(eligible_df)
+    combo_context_sections = []
+    for card_count in COMBO_CARD_COUNTS:
+        combos_df, card_combos = build_combo_recommendations(eligible_df, card_count)
+        combo_context_sections.append(
+            f"""Best {card_count}-card combo recommendations CSV:
+{combos_df.to_csv(index=False)}
+
+Top {card_count}-card combo category assignments:
+{combo_breakdowns_context(eligible_df, combos_df, card_combos, count=2)}
+"""
+        )
+    current_accounts = build_current_card_accounts_context_df(eligible_df, account_card_map)
+    current_performance = build_current_card_performance_df(eligible_df, account_card_map)
+
+    eligible_factor = annualization_factor(eligible_df)
+    all_spend = float(all_spending_df["Spend"].sum()) if not all_spending_df.empty else 0.0
+    eligible_spend = float(eligible_df["Spend"].sum()) if not eligible_df.empty else 0.0
+    bank_only_spend = float(bank_only_df["Spend"].sum()) if not bank_only_df.empty else 0.0
+
+    context = f"""Credit card recommendation context
+
+Scope rules:
+- This tab answers only credit card recommendation questions.
+- Use the cleaned `Category` column for reward estimates. Do not re-infer categories from merchant names.
+- Credit card payments/paybacks were already removed from spending.
+- Recommendation tables use credit-card-eligible spending only. Bank-account-only merchants are excluded.
+- Reward estimates are annualized to a full year using the observed eligible spending date range.
+- Statement credits are shown for reference but are not deducted from estimated net value in this app.
+- Use the tables below as the source of truth. If a question cannot be answered from them, say so.
+
+Credit card reward knowledge:
+{recommendation_knowledge or "No credit card reward knowledge loaded."}
+
+Spending window:
+All spending rows: {len(all_spending_df):,}
+All spending date range: {date_range_text(all_spending_df)}
+All observed spending: {money(all_spend)}
+Eligible spending rows: {len(eligible_df):,}
+Eligible spending date range: {date_range_text(eligible_df)}
+Eligible observed spending: {money(eligible_spend)}
+Eligible annualization factor: {eligible_factor:.4f}
+Bank-only excluded rows: {len(bank_only_df):,}
+Bank-only excluded observed spending: {money(bank_only_spend)}
+
+Eligible annualized category summary CSV:
+{annualized_category_summary(eligible_df).to_csv(index=False)}
+
+Bank-only excluded category summary CSV:
+{annualized_category_summary(bank_only_df).to_csv(index=False)}
+
+Detected current card accounts CSV:
+{current_accounts.to_csv(index=False)}
+
+Selected current card performance CSV:
+{current_performance.to_csv(index=False)}
+
+Card catalog and reward assumptions CSV:
+{card_catalog_context_csv()}
+
+Best single card recommendations CSV:
+{recs.to_csv(index=False)}
+
+Top single card category breakdowns:
+{single_card_breakdowns_context(eligible_df, recs)}
+
+Best 2- through 6-card combo recommendations and category assignments:
+{"".join(combo_context_sections)}
+"""
+    if len(context) > CARD_RECOMMENDATION_CONTEXT_CHAR_LIMIT:
+        context = (
+            context[:CARD_RECOMMENDATION_CONTEXT_CHAR_LIMIT]
+            + "\n[Credit card recommendation context truncated because it exceeded the chat context budget.]\n"
+        )
+    return context
+
+
+def ask_openai_card_recommendation_question(
+    question: str,
+    all_spending_df: pd.DataFrame,
+    eligible_df: pd.DataFrame,
+    bank_only_df: pd.DataFrame,
+    account_card_map: dict[str, str],
+    previous_messages: list[dict[str, str]],
+) -> str:
+    load_local_env()
+    if not os.getenv("OPENAI_API_KEY"):
+        return "OpenAI API key not found. Add `OPENAI_API_KEY=...` to `.env` and rerun the app."
+
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return "OpenAI Python SDK is not installed. Run `pip install -e .` and rerun the app."
+
+    model = get_openai_model()
+    client = OpenAI()
+    recommendation_context = build_card_recommendation_context(
+        all_spending_df,
+        eligible_df,
+        bank_only_df,
+        account_card_map,
+    )
+    prompt = f"""{recommendation_context}
+
+Recent chat history:
+{recent_chat_history(previous_messages)}
+
+User question:
+{question}
+"""
+
+    try:
+        response = client.responses.create(
+            model=model,
+            instructions=(
+                "You are a credit card recommendation assistant. "
+                "Only answer questions about card recommendations, reward estimates, card combinations, "
+                "current-card performance, annualization, reward assumptions, or eligible spending needed "
+                "for those recommendations. If the user asks about unrelated spending analysis or another "
+                "topic, briefly say you can only answer credit card recommendation questions in this tab. "
+                "Use only the provided context, do not invent reward rates, and keep answers concise."
+            ),
+            input=prompt,
+            max_output_tokens=900,
+        )
+    except Exception as exc:
+        return f"OpenAI API request failed: {exc}"
+
+    answer = getattr(response, "output_text", "").strip()
+    return answer or "OpenAI returned an empty response."
+
+
+def render_recommendation_chat(
+    all_spending_df: pd.DataFrame,
+    eligible_df: pd.DataFrame,
+    bank_only_df: pd.DataFrame,
+    account_card_map: dict[str, str],
+    input_key: str = "recommendation_chat_input",
+) -> None:
+    selected_cards_signature = "|".join(
+        f"{account}={card}" for account, card in sorted(account_card_map.items())
+    )
+    recommendation_signature = (
+        f"{len(all_spending_df)}:{len(eligible_df)}:"
+        f"{eligible_df['Spend'].sum() if not eligible_df.empty else 0}:"
+        f"{date_range_text(eligible_df)}:{selected_cards_signature}"
+    )
+
+    if st.session_state.get("recommendation_data_signature") != recommendation_signature:
+        st.session_state.recommendation_data_signature = recommendation_signature
+        st.session_state.recommendation_messages = [
+            {
+                "role": "assistant",
+                "content": (
+                    "Ask a credit card recommendation question. I will answer using the card catalog, "
+                    "reward assumptions, and cleaned spending data loaded in this app."
+                ),
+            }
+        ]
+    elif "recommendation_messages" not in st.session_state:
+        st.session_state.recommendation_messages = [
+            {
+                "role": "assistant",
+                "content": (
+                    "Ask a credit card recommendation question. I will answer using the card catalog, "
+                    "reward assumptions, and cleaned spending data loaded in this app."
+                ),
+            }
+        ]
+
+    st.subheader("Chat")
+    with st.container(height=420, border=True, autoscroll=True):
+        for message in st.session_state.recommendation_messages:
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
+
+    question = st.chat_input(
+        "Ask a credit card recommendation question",
+        key=input_key,
+    )
+    if question:
+        previous_messages = list(st.session_state.recommendation_messages)
+        st.session_state.recommendation_messages.append({"role": "user", "content": question})
+        with st.spinner("Asking OpenAI..."):
+            answer = ask_openai_card_recommendation_question(
+                question,
+                all_spending_df,
+                eligible_df,
+                bank_only_df,
+                account_card_map,
+                previous_messages,
+            )
+        st.session_state.recommendation_messages.append({"role": "assistant", "content": answer})
+        st.rerun()
+
+
+def render_combo_section(
+    spending_df: pd.DataFrame,
+    card_count: int,
+    all_spending_df: pd.DataFrame,
+    bank_only_df: pd.DataFrame,
+    account_card_map: dict[str, str],
+) -> None:
+    st.caption(combo_assignment_caption(card_count))
+    combos_df, card_combos = build_combo_recommendations(spending_df, card_count)
+    if combos_df.empty:
+        return
+    st.dataframe(
+        combos_df,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
+            "Total Annual Fees": st.column_config.NumberColumn("Total Annual Fees", format="$%.0f"),
+            "Statement Credits": st.column_config.NumberColumn("Statement Credits", format="$%.0f"),
+            "Est. Net Value": st.column_config.NumberColumn("Est. Net Value", format="$%.2f"),
+        },
+    )
+    combo_labels = combos_df["Cards"].tolist()
+    selected_label = st.selectbox(
+        "Show category breakdown for:",
+        combo_labels,
+        key=f"combo_{card_count}_breakdown_select",
+    )
+    selected_idx = combo_labels.index(selected_label)
+    selected_combo = card_combos[selected_idx]
+    breakdown = build_combo_category_breakdown(spending_df, selected_combo)
+    breakdown_col, chat_col = st.columns([1.2, 0.8], gap="large")
+    with breakdown_col:
+        if not breakdown.empty:
+            st.markdown(f"**Category assignments: {selected_label}**")
+            st.dataframe(
+                breakdown,
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Est. Annual Spend": st.column_config.NumberColumn("Est. Annual Spend", format="$%.2f"),
+                    "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
+                },
+            )
+    with chat_col:
+        render_recommendation_chat(
+            all_spending_df,
+            spending_df,
+            bank_only_df,
+            account_card_map,
+            input_key=f"recommendation_chat_input_combo_{card_count}",
+        )
+
+
+def render_current_card_performance(eligible_df: pd.DataFrame) -> dict[str, str]:
+    st.subheader("Your Current Cards")
+
+    cc_accounts = detect_credit_card_accounts(eligible_df)
+    if not cc_accounts:
+        st.info("No credit card accounts detected in the loaded data.")
+        return {}
+
+    card_options = ["— select card —"] + [c["name"] for c in CREDIT_CARD_CATALOG]
+
+    account_card_map: dict[str, str] = {}
+    for account in cc_accounts:
+        auto = auto_match_account_to_card(account)
+        default_idx = card_options.index(auto) if auto and auto in card_options else 0
+        key = f"current_card_{account}"
+        if st.session_state.get(key) not in card_options and key in st.session_state:
+            del st.session_state[key]
+        selected = st.selectbox(
+            f"Account: **{account}**",
+            card_options,
+            index=default_idx,
+            key=key,
+        )
+        if selected != "— select card —":
+            account_card_map[account] = selected
+
+    if not account_card_map:
+        st.caption("Select a card for each account above to see current reward estimates.")
+        return {}
+
+    current_performance = build_current_card_performance_df(eligible_df, account_card_map)
+    if current_performance.empty:
+        return account_card_map
+    st.dataframe(
+        current_performance,
         hide_index=True,
         use_container_width=True,
         column_config={
             "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
             "Annual Fee": st.column_config.NumberColumn("Annual Fee", format="$%.0f"),
+            "Statement Credits": st.column_config.NumberColumn("Statement Credits", format="$%.0f"),
             "Est. Net Value": st.column_config.NumberColumn("Est. Net Value", format="$%.2f"),
         },
     )
+    return account_card_map
 
 
 def render_card_recommendations(spending_df: pd.DataFrame) -> None:
@@ -2262,6 +3372,7 @@ def render_card_recommendations(spending_df: pd.DataFrame) -> None:
     if valid_dates.empty:
         return
 
+    all_spending_df = spending_df
     eligible_df, bank_only_df = filter_credit_card_eligible_spending(spending_df)
 
     days = (valid_dates.max() - valid_dates.min()).days + 1
@@ -2286,52 +3397,77 @@ def render_card_recommendations(spending_df: pd.DataFrame) -> None:
 
     spending_df = eligible_df
 
-    render_current_card_performance(spending_df)
-    st.divider()
+    tab_rewards, tab_apr = st.tabs([
+        "Cash Back Rewards",
+        "Best APR",
+    ])
 
-    tab_single, tab_two, tab_three = st.tabs(["Best Single Card", "Best 2-Card Combo", "Best 3-Card Combo"])
+    with tab_rewards:
+        account_card_map = render_current_card_performance(spending_df)
+        st.divider()
+        render_application_value_summary(spending_df, account_card_map)
+        st.divider()
 
-    with tab_single:
-        recs = build_card_recommendations(spending_df)
-        st.dataframe(
-            recs,
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
-                "Annual Fee": st.column_config.NumberColumn("Annual Fee", format="$%.0f"),
-                "Est. Net Value": st.column_config.NumberColumn("Est. Net Value", format="$%.2f"),
-            },
-        )
-        top_card_names = recs.head(5)["Card"].tolist()
-        selected_card_name = st.selectbox(
-            "Show earnings breakdown for:",
-            top_card_names,
-            key="single_card_breakdown_select",
-        )
-        selected_card_def = next((c for c in CREDIT_CARD_CATALOG if c["name"] == selected_card_name), None)
-        if selected_card_def:
-            st.caption(selected_card_def["notes"])
-            breakdown = build_card_category_breakdown(spending_df, selected_card_def)
-            if not breakdown.empty:
-                st.markdown(f"**Earnings breakdown: {selected_card_name}**")
-                st.dataframe(
-                    breakdown,
-                    hide_index=True,
-                    use_container_width=True,
-                    column_config={
-                        "Est. Annual Spend": st.column_config.NumberColumn("Est. Annual Spend", format="$%.2f"),
-                        "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
-                    },
+        tabs = st.tabs(["Best Single Card"] + [combo_tab_label(count) for count in COMBO_CARD_COUNTS])
+        tab_single = tabs[0]
+
+        with tab_single:
+            recs = build_card_recommendations(spending_df)
+            st.dataframe(
+                recs,
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
+                    "Annual Fee": st.column_config.NumberColumn("Annual Fee", format="$%.0f"),
+                    "Statement Credits": st.column_config.NumberColumn("Statement Credits", format="$%.0f"),
+                    "Est. Net Value": st.column_config.NumberColumn("Est. Net Value", format="$%.2f"),
+                },
+            )
+            top_card_names = recs.head(5)["Card"].tolist()
+            selected_card_name = st.selectbox(
+                "Show earnings breakdown for:",
+                top_card_names,
+                key="single_card_breakdown_select",
+            )
+            selected_card_def = next((c for c in CREDIT_CARD_CATALOG if c["name"] == selected_card_name), None)
+            breakdown_col, chat_col = st.columns([1.2, 0.8], gap="large")
+            with breakdown_col:
+                if selected_card_def:
+                    st.caption(selected_card_def["notes"])
+                    breakdown = build_card_category_breakdown(spending_df, selected_card_def)
+                    if not breakdown.empty:
+                        st.markdown(f"**Earnings breakdown: {selected_card_name}**")
+                        st.dataframe(
+                            breakdown,
+                            hide_index=True,
+                            use_container_width=True,
+                            column_config={
+                                "Est. Annual Spend": st.column_config.NumberColumn("Est. Annual Spend", format="$%.2f"),
+                                "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
+                            },
+                        )
+            with chat_col:
+                render_recommendation_chat(
+                    all_spending_df,
+                    spending_df,
+                    bank_only_df,
+                    account_card_map,
+                    input_key="recommendation_chat_input_single",
                 )
 
-    with tab_two:
-        st.caption("Each spending category is assigned to whichever card in the pair earns the highest rate for it.")
-        render_combo_section(spending_df, card_count=2)
+        for tab, card_count in zip(tabs[1:], COMBO_CARD_COUNTS):
+            with tab:
+                render_combo_section(
+                    spending_df,
+                    card_count=card_count,
+                    all_spending_df=all_spending_df,
+                    bank_only_df=bank_only_df,
+                    account_card_map=account_card_map,
+                )
 
-    with tab_three:
-        st.caption("Each spending category is assigned to whichever card in the trio earns the highest rate for it.")
-        render_combo_section(spending_df, card_count=3)
+    with tab_apr:
+        render_minimum_payment_recommendations(spending_df)
 
 
 def main() -> None:
@@ -2436,7 +3572,7 @@ def main() -> None:
                     with st.chat_message(message["role"]):
                         st.write(message["content"])
 
-            question = st.chat_input("Ask a spending question")
+            question = st.chat_input("Ask a spending question", key="summary_chat_input")
             if question:
                 previous_messages = list(st.session_state.messages)
                 st.session_state.messages.append({"role": "user", "content": question})
