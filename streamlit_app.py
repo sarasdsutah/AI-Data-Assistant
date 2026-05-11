@@ -17,7 +17,7 @@ KNOWLEDGE_DIR = BASE_DIR / "knowledge"
 CATEGORY_RULES_PATH = KNOWLEDGE_DIR / "category_normalization_rules.md"
 SPENDING_ANALYSIS_RULES_PATH = KNOWLEDGE_DIR / "spending_analysis_rules.md"
 CARD_RECOMMENDATIONS_PATH = KNOWLEDGE_DIR / "credit_card_recommendations.md"
-EXCLUDED_SPENDING_CATEGORIES = {"Credit Card Payments", "Internal Transfers", "Investments", "Taxes"}
+EXCLUDED_SPENDING_CATEGORIES = {"Credit Card Payments", "Internal Transfers", "Investments", "Taxes", "Refunds/Cash Back"}
 BANK_ACCOUNT_KEYWORDS = frozenset(["bank account", "checking", "savings", "high yield", "money market", "debit", "hysa", "brokerage", "investment account"])
 ACCOUNT_CARD_OVERRIDES: dict[str, str] = {
     "credit card - ending in 4346": "BofA Unlimited Cash Rewards",
@@ -54,10 +54,10 @@ INFERRED_CATEGORY_RULES = [
     ("Credit Card Payments", ["autopay", "auto-pmt", "payment", "pmt"]),
     ("Parking", ["parking", "garage", "ccri", "honk"]),
     ("Gasoline/Fuel", ["costco gas station"]),
+    ("Amazon Shopping", ["amazon", "amzn"]),
     ("Groceries", ["grocery", "groceries", "market", "supermarket", "costco", "walmart", "wal-mart", "target", "dollar tree", "trader joe", "smith", "ocean mart", "harmons", "yami", "yamibuy", "winco food", "mochinut", "7-eleven", "maverik"]),
     ("Gasoline/Fuel", ["gas", "fuel", "gasoline", "holiday", "pilot_"]),
     ("Online Service & Subscriptions", ["us mobile", "apple.com/bill", "prime", "audible", "medium.com", "ring.com", "openai", "chatgpt", "netflix", "neflix", "disney plus", "disney+", "disneyplus", "youtube premium", "youtubepremium", "uber one", "dashpass", "door dash pass", "doordash pass", "grubhub+", "instacart+", "ipsy"]),
-    ("Amazon Shopping", ["amazon", "amzn"]),
     ("Travel", ["travel", "booking", "hotel", "airline", "air lines", "korean air", "united airlines", "delta air", "cheapoair", "southwest airlines", "american airlines", "airport railroad", "airport", "seoul kr", "rent-a-car"]),
     ("Coffee & Drinks", ["coffee", "tea", "milk tea", "boba", "beans & brews", "tiger sugar", "starbucks", "meet fresh", "liquor", "wine", "alcohol"]),
     ("Food Delivery", ["uber eats", "ubereats", "doordash", "door dash", "grubhub", "postmates", "seamless", "delivery.com"]),
@@ -90,6 +90,7 @@ SOURCE_CATEGORY_OVERRIDE_RULES = {
     "Cable/Satellite": "Online Service & Subscriptions",
     "Phone Billing": "Online Service & Subscriptions",
     "Phone Bills": "Online Service & Subscriptions",
+    "Other Income": "Refunds/Cash Back",
 }
 CREDIT_CARD_CATALOG: list[dict] = [
     {
@@ -2384,13 +2385,64 @@ def build_current_card_accounts_context_df(
     return pd.DataFrame(rows)
 
 
+def build_current_card_category_detail_df(
+    eligible_df: pd.DataFrame,
+    account_card_map: dict[str, str],
+) -> pd.DataFrame:
+    if eligible_df.empty or not account_card_map:
+        return pd.DataFrame()
+
+    factor = annualization_factor(eligible_df)
+    rows = []
+    for account, card_name in account_card_map.items():
+        card = next((c for c in CREDIT_CARD_CATALOG if c["name"] == card_name), None)
+        if card is None:
+            continue
+        account_df = eligible_df[eligible_df["Account"].fillna("").astype(str) == account]
+        default_rate = card.get("default_rate", 0.01)
+        for category, spend in account_df.groupby("Category")["Spend"].sum().items():
+            category = str(category)
+            annualized = float(spend) * factor
+            rewards = _standard_card_rewards(category, annualized, card)
+            rate = card["category_rates"].get(category, default_rate) if "quarterly_categories" not in card else (
+                rewards / annualized if annualized > 0 else default_rate
+            )
+            rows.append({
+                "Category": category,
+                "Card": card_name,
+                "Spending": annualized,
+                "% Cash Rewards": rate,
+                "Est. Rewards": rewards,
+            })
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows).sort_values(["Category", "Card"]).reset_index(drop=True)
+
+    totals = df.groupby("Card", as_index=False).agg(
+        Spending=("Spending", "sum"),
+        Est_Rewards=("Est. Rewards", "sum"),
+    )
+    total_rows = []
+    for _, t in totals.iterrows():
+        total_rows.append({
+            "Category": "Total",
+            "Card": t["Card"],
+            "Spending": t["Spending"],
+            "% Cash Rewards": t["Est_Rewards"] / t["Spending"] if t["Spending"] > 0 else 0.0,
+            "Est. Rewards": t["Est_Rewards"],
+        })
+    return pd.concat([df, pd.DataFrame(total_rows)], ignore_index=True)
+
+
 def build_current_card_performance_df(
     eligible_df: pd.DataFrame,
     account_card_map: dict[str, str],
 ) -> pd.DataFrame:
     if eligible_df.empty or not account_card_map:
         return pd.DataFrame(
-            columns=["Account", "Card", "Est. Annual Rewards", "Annual Fee", "Statement Credits", "Est. Net Value"]
+            columns=["Account", "Card", "Total Spending", "Est. Annual Rewards", "Annual Fee", "Statement Credits", "Est. Net Value"]
         )
 
     global_factor = annualization_factor(eligible_df)
@@ -2400,13 +2452,15 @@ def build_current_card_performance_df(
         if card is None:
             continue
         account_df = eligible_df[eligible_df["Account"].fillna("").astype(str) == account]
+        annual_spending = float(account_df["Spend"].sum()) * global_factor
         if "all_spending_rate" in card:
-            annual_rewards = float(account_df["Spend"].sum()) * global_factor * card["all_spending_rate"]
+            annual_rewards = annual_spending * card["all_spending_rate"]
         else:
             annual_rewards = estimate_card_annual_rewards(account_df, card, factor=global_factor)
         rows.append({
             "Account": account,
             "Card": card_name,
+            "Total Spending": annual_spending,
             "Est. Annual Rewards": annual_rewards,
             "Annual Fee": float(card["annual_fee"]),
             "Statement Credits": card.get("statement_credits") or None,
@@ -2415,12 +2469,13 @@ def build_current_card_performance_df(
 
     if not rows:
         return pd.DataFrame(
-            columns=["Account", "Card", "Est. Annual Rewards", "Annual Fee", "Statement Credits", "Est. Net Value"]
+            columns=["Account", "Card", "Total Spending", "Est. Annual Rewards", "Annual Fee", "Statement Credits", "Est. Net Value"]
         )
 
     rows.append({
         "Account": "Total",
         "Card": "",
+        "Total Spending": sum(r["Total Spending"] for r in rows),
         "Est. Annual Rewards": sum(r["Est. Annual Rewards"] for r in rows),
         "Annual Fee": sum(r["Annual Fee"] for r in rows),
         "Statement Credits": sum(float(r["Statement Credits"] or 0) for r in rows) or None,
@@ -3354,12 +3409,28 @@ def render_current_card_performance(eligible_df: pd.DataFrame) -> dict[str, str]
         hide_index=True,
         use_container_width=True,
         column_config={
+            "Total Spending": st.column_config.NumberColumn("Total Spending", format="$%.2f"),
             "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
             "Annual Fee": st.column_config.NumberColumn("Annual Fee", format="$%.0f"),
             "Statement Credits": st.column_config.NumberColumn("Statement Credits", format="$%.0f"),
             "Est. Net Value": st.column_config.NumberColumn("Est. Net Value", format="$%.2f"),
         },
     )
+
+    category_detail = build_current_card_category_detail_df(eligible_df, account_card_map)
+    if not category_detail.empty:
+        st.markdown("**Spending by Category & Card**")
+        st.dataframe(
+            category_detail,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Spending": st.column_config.NumberColumn("Spending", format="$%.2f"),
+                "% Cash Rewards": st.column_config.NumberColumn("% Cash Rewards", format="%.2%%"),
+                "Est. Rewards": st.column_config.NumberColumn("Est. Rewards", format="$%.2f"),
+            },
+        )
+
     return account_card_map
 
 
