@@ -21,6 +21,10 @@ EXCLUDED_SPENDING_CATEGORIES = {"Credit Card Payments", "Internal Transfers", "I
 BANK_ACCOUNT_KEYWORDS = frozenset(["bank account", "checking", "savings", "high yield", "money market", "debit", "hysa", "brokerage", "investment account"])
 ACCOUNT_CARD_OVERRIDES: dict[str, str] = {
     "credit card - ending in 4346": "BofA Unlimited Cash Rewards",
+    "amazon store card - ending in 8303": "Amazon Store Card",
+    "costco anywhere visa card by citi - ending in 6582": "Costco Anywhere Visa",
+    "customized cash rewards visa signature () - ending in 6282": "BofA Customized Cash Rewards (Dining)",
+    "discover it card - ending in 2072": "Discover It Cash Back",
 }
 CREDIT_CARD_KEYWORDS = frozenset(["visa", "mastercard", "card", "credit", "amex", "discover", "rewards", "sapphire", "freedom", "preferred", "reserve", "prime store"])
 REQUIRED_COLUMNS = ["Date", "Description"]
@@ -2393,6 +2397,7 @@ def build_current_card_category_detail_df(
         return pd.DataFrame()
 
     factor = annualization_factor(eligible_df)
+    current_cards = [c for c in CREDIT_CARD_CATALOG if c["name"] in account_card_map.values()]
     rows = []
     for account, card_name in account_card_map.items():
         card = next((c for c in CREDIT_CARD_CATALOG if c["name"] == card_name), None)
@@ -2400,19 +2405,53 @@ def build_current_card_category_detail_df(
             continue
         account_df = eligible_df[eligible_df["Account"].fillna("").astype(str) == account]
         default_rate = card.get("default_rate", 0.01)
-        for category, spend in account_df.groupby("Category")["Spend"].sum().items():
+        cat_groups = account_df.groupby("Category")
+        for category, spend in cat_groups["Spend"].sum().items():
             category = str(category)
+            tx_count = int(cat_groups.size()[category])
             annualized = float(spend) * factor
             rewards = _standard_card_rewards(category, annualized, card)
             rate = card["category_rates"].get(category, default_rate) if "quarterly_categories" not in card else (
                 rewards / annualized if annualized > 0 else default_rate
             )
+
+            # Find all cards with an explicit bonus rate that beat the current card
+            best_rewards = rewards
+            best_rate = rate
+            best_cards: list[tuple[object, float]] = []
+            for c in current_cards:
+                if c["name"] == card_name:
+                    continue
+                if category not in c.get("category_rates", {}):
+                    continue
+                c_rewards = _standard_card_rewards(category, annualized, c)
+                c_rate = c["category_rates"][category]
+                if c_rewards > rewards:
+                    if c_rewards > best_rewards:
+                        best_rewards = c_rewards
+                        best_rate = c_rate
+                        best_cards = [(c, c_rate)]
+                    elif c_rewards == best_rewards:
+                        best_cards.append((c, c_rate))
+
+            gap_amount = best_rewards - rewards if best_cards else 0.0
+            if best_cards:
+                rec_card = " or ".join(c["name"] for c, _ in best_cards)
+                reason = f"{best_rate*100:.0f}% vs {rate*100:.0f}% → +${gap_amount:,.2f}/yr"
+            else:
+                rec_card = ""
+                reason = ""
+
             rows.append({
                 "Category": category,
                 "Card": card_name,
                 "Spending": annualized,
                 "% Cash Rewards": rate,
                 "Est. Rewards": rewards,
+                "Recommended Card": rec_card,
+                "Reason": reason,
+                "_gap": gap_amount,
+                "_tx_count": tx_count,
             })
 
     if not rows:
@@ -2432,8 +2471,106 @@ def build_current_card_category_detail_df(
             "Spending": t["Spending"],
             "% Cash Rewards": t["Est_Rewards"] / t["Spending"] if t["Spending"] > 0 else 0.0,
             "Est. Rewards": t["Est_Rewards"],
+            "Recommended Card": "",
+            "Reason": "",
+            "_gap": 0.0,
+            "_tx_count": 0,
         })
     return pd.concat([df, pd.DataFrame(total_rows)], ignore_index=True)
+
+
+def build_optimization_insights(
+    eligible_df: pd.DataFrame,
+    account_card_map: dict[str, str],
+) -> list[dict]:
+    if eligible_df.empty or not account_card_map:
+        return []
+
+    factor = annualization_factor(eligible_df)
+    cards = [c for c in CREDIT_CARD_CATALOG if c["name"] in account_card_map.values()]
+    insights = []
+
+    mapped_accounts = set(account_card_map.keys())
+    mapped_df = eligible_df[eligible_df["Account"].fillna("").astype(str).isin(mapped_accounts)]
+
+    for category, group in mapped_df.groupby("Category"):
+        category = str(category)
+        annualized_spend = float(group["Spend"].sum()) * factor
+        if annualized_spend < 1.0:
+            continue
+
+        current_rewards = 0.0
+        for account, card_name in account_card_map.items():
+            card = next((c for c in cards if c["name"] == card_name), None)
+            if card is None:
+                continue
+            acct_group = group[group["Account"].fillna("").astype(str) == account]
+            if acct_group.empty:
+                continue
+            current_rewards += _standard_card_rewards(category, float(acct_group["Spend"].sum()) * factor, card)
+
+        best_card, best_rewards = None, 0.0
+        for card in cards:
+            r = _standard_card_rewards(category, annualized_spend, card)
+            if r > best_rewards:
+                best_rewards, best_card = r, card
+
+        # Find which card currently handles the majority of spending in this category
+        primary_account = group.groupby(group["Account"].fillna("").astype(str))["Spend"].sum().idxmax()
+        primary_card_name = account_card_map.get(primary_account, "")
+
+        gap = best_rewards - current_rewards
+
+        # Only flag if the best card is different from the primary card and gap is meaningful
+        if best_card and best_card["name"] != primary_card_name and gap >= 10.0:
+            insights.append({
+                "category": category,
+                "annualized_spend": annualized_spend,
+                "current_rewards": current_rewards,
+                "current_rate": current_rewards / annualized_spend if annualized_spend > 0 else 0.0,
+                "best_card": best_card["name"],
+                "best_rate": best_rewards / annualized_spend if annualized_spend > 0 else 0.0,
+                "best_rewards": best_rewards,
+                "gap": gap,
+            })
+
+    return sorted(insights, key=lambda x: x["gap"], reverse=True)
+
+
+def compute_combined_reward_potential(
+    eligible_df: pd.DataFrame,
+    account_card_map: dict[str, str],
+) -> tuple[float, float]:
+    """Return (current_rewards, optimal_rewards) annualized across all current cards."""
+    if eligible_df.empty or not account_card_map:
+        return 0.0, 0.0
+
+    factor = annualization_factor(eligible_df)
+    cards = [c for c in CREDIT_CARD_CATALOG if c["name"] in account_card_map.values()]
+
+    current_rewards = 0.0
+    for account, card_name in account_card_map.items():
+        card = next((c for c in cards if c["name"] == card_name), None)
+        if card is None:
+            continue
+        account_df = eligible_df[eligible_df["Account"].fillna("").astype(str) == account]
+        if "all_spending_rate" in card:
+            current_rewards += float(account_df["Spend"].sum()) * factor * card["all_spending_rate"]
+        else:
+            current_rewards += estimate_card_annual_rewards(account_df, card, factor=factor)
+
+    mapped_accounts = set(account_card_map.keys())
+    mapped_df = eligible_df[eligible_df["Account"].fillna("").astype(str).isin(mapped_accounts)]
+
+    optimal_rewards = 0.0
+    for category, spend in mapped_df.groupby("Category")["Spend"].sum().items():
+        annualized = float(spend) * factor
+        optimal_rewards += max(
+            (_standard_card_rewards(str(category), annualized, c) for c in cards),
+            default=0.0,
+        )
+
+    return current_rewards, optimal_rewards
 
 
 def build_current_card_performance_df(
@@ -3382,18 +3519,20 @@ def render_current_card_performance(eligible_df: pd.DataFrame) -> dict[str, str]
     card_options = ["— select card —"] + [c["name"] for c in CREDIT_CARD_CATALOG]
 
     account_card_map: dict[str, str] = {}
-    for account in cc_accounts:
+    cols = st.columns(3)
+    for i, account in enumerate(cc_accounts):
         auto = auto_match_account_to_card(account)
         default_idx = card_options.index(auto) if auto and auto in card_options else 0
         key = f"current_card_{account}"
         if st.session_state.get(key) not in card_options and key in st.session_state:
             del st.session_state[key]
-        selected = st.selectbox(
-            f"Account: **{account}**",
-            card_options,
-            index=default_idx,
-            key=key,
-        )
+        with cols[i % 3]:
+            selected = st.selectbox(
+                f"Account: **{account}**",
+                card_options,
+                index=default_idx,
+                key=key,
+            )
         if selected != "— select card —":
             account_card_map[account] = selected
 
@@ -3404,32 +3543,77 @@ def render_current_card_performance(eligible_df: pd.DataFrame) -> dict[str, str]
     current_performance = build_current_card_performance_df(eligible_df, account_card_map)
     if current_performance.empty:
         return account_card_map
-    st.dataframe(
-        current_performance,
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            "Total Spending": st.column_config.NumberColumn("Total Spending", format="$%.2f"),
-            "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
-            "Annual Fee": st.column_config.NumberColumn("Annual Fee", format="$%.0f"),
-            "Statement Credits": st.column_config.NumberColumn("Statement Credits", format="$%.0f"),
-            "Est. Net Value": st.column_config.NumberColumn("Est. Net Value", format="$%.2f"),
-        },
-    )
 
     category_detail = build_current_card_category_detail_df(eligible_df, account_card_map)
-    if not category_detail.empty:
-        st.markdown("**Spending by Category & Card**")
+    opp_rows = category_detail[
+        (category_detail["Category"] != "Total")
+        & (category_detail["Recommended Card"] != "")
+    ]
+    opportunities = (
+        opp_rows.groupby(["Category", "Recommended Card"], as_index=False)
+        .agg(
+            total_gap=("_gap", "sum"),
+            current_spend=("Spending", "sum"),
+            tx_count=("_tx_count", "sum"),
+        )
+        .query("total_gap > 0")
+        .sort_values("total_gap", ascending=False)
+    )
+
+    non_opp_rows = category_detail[category_detail["Category"] != "Total"]
+    current_rewards = non_opp_rows["Est. Rewards"].sum()
+    total_uncaptured = opportunities["total_gap"].sum()
+    optimal_rewards = current_rewards + total_uncaptured
+    efficiency = (current_rewards / optimal_rewards * 100) if optimal_rewards > 0 else 100.0
+    st.markdown("**Combined Rewards Potential**")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Current Est. Rewards", f"${current_rewards:,.2f}")
+    col2.metric("Max Possible (Best Card per Category)", f"${optimal_rewards:,.2f}")
+    col3.metric("Uncaptured Rewards", f"${total_uncaptured:,.2f}")
+    col4.metric("Optimization Score", f"{efficiency:.1f}%")
+
+    st.markdown("**Reward Optimization Summary**")
+    if opportunities.empty:
+        st.success("You are already maximizing rewards across all categories with your current cards.", icon="✅")
+    else:
+        total_gap = opportunities["total_gap"].sum()
+        top_lines = "\n".join(
+            f"- **{row['Category']}**: switch {row['tx_count']} transactions to {row['Recommended Card']} (+\${row['total_gap']:,.2f}/yr)"
+            for _, row in opportunities.iterrows()
+        )
+        st.markdown(
+            f"> 💡 You could earn up to **\${total_gap:,.2f} more per year** by routing spending "
+            f"to the best card in each category.\n>\n> Top opportunities:\n{top_lines}"
+        )
+
+    with st.expander("See full card & category details"):
+        st.markdown("**Card Summary**")
         st.dataframe(
-            category_detail,
+            current_performance,
             hide_index=True,
             use_container_width=True,
             column_config={
-                "Spending": st.column_config.NumberColumn("Spending", format="$%.2f"),
-                "% Cash Rewards": st.column_config.NumberColumn("% Cash Rewards", format="%.2%%"),
-                "Est. Rewards": st.column_config.NumberColumn("Est. Rewards", format="$%.2f"),
+                "Total Spending": st.column_config.NumberColumn("Total Spending", format="$%.2f"),
+                "Est. Annual Rewards": st.column_config.NumberColumn("Est. Annual Rewards", format="$%.2f"),
+                "Annual Fee": st.column_config.NumberColumn("Annual Fee", format="$%.0f"),
+                "Statement Credits": st.column_config.NumberColumn("Statement Credits", format="$%.0f"),
+                "Est. Net Value": st.column_config.NumberColumn("Est. Net Value", format="$%.2f"),
             },
         )
+        if not category_detail.empty:
+            st.markdown("**Spending by Category & Card**")
+            display_detail = category_detail.drop(columns=["_gap", "_tx_count"]).copy()
+            display_detail["% Cash Rewards"] = display_detail["% Cash Rewards"] * 100
+            st.dataframe(
+                display_detail,
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Spending": st.column_config.NumberColumn("Spending", format="$%.2f"),
+                    "% Cash Rewards": st.column_config.NumberColumn("% Cash Rewards", format="%.1f%%"),
+                    "Est. Rewards": st.column_config.NumberColumn("Est. Rewards", format="$%.2f"),
+                },
+            )
 
     return account_card_map
 
